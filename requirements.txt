@@ -1,0 +1,10 @@
+pandas
+numpy
+scikit-learn
+xgboost
+shap
+networkx
+opencv-python
+Pillow
+streamlit
+matplotlib

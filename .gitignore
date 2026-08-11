@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Data and model artifacts (generated, not source)
+data/*
+!data/.gitkeep
+models/*
+!models/.gitkeep
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
+
+# Environment / secrets
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.claude
