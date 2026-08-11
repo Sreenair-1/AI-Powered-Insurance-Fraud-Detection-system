@@ -4,7 +4,7 @@ import pandas as pd
 
 def setup_test_datasets():
     """Create minimal mock datasets for CI testing."""
-    base_path = Path("data/raw")
+    base_path = Path("/data/raw")
     
     # Create directories
     (base_path / "demographics").mkdir(parents=True, exist_ok=True)
