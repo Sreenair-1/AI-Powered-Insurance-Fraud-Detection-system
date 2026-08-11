@@ -38,7 +38,7 @@ st.set_page_config(page_title="Insurance Claim Fraud Risk Review", layout="wide"
 MOTOR_DOMAIN = "motor"
 HEALTH_DOMAIN = "health"
 
-_RISK_ICON = {"low": ":large_green_circle:", "medium": ":large_yellow_circle:", "high": ":red_circle:"}
+_RISK_ICON = {"low": "\U0001F7E2", "medium": "\U0001F7E1", "high": "\U0001F534"}
 
 
 def _render_header() -> None:
