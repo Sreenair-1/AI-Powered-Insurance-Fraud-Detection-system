@@ -60,7 +60,7 @@ def _approximate_closeness_centrality(
     This is a ranking estimate, not the exact Wasserman-Faust-adjusted value
     `nx.closeness_centrality` returns for disconnected graphs -- acceptable
     here because these features feed an XGBoost model as evidence, never a
-    thresholded fraud decision (CLAUDE.md §3). A node with no reachable
+    thresholded fraud decision. A node with no reachable
     landmark (an isolated component none of the `k` samples landed in) gets
     `0.0`, the same convention `nx.closeness_centrality` uses for isolated
     nodes.

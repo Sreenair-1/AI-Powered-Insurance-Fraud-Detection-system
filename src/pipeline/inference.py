@@ -18,13 +18,11 @@ This module does not fit models and does not build feature matrices itself
 - like `src.features.fusion`, it is purely an orchestration/assembly layer
 over already-fitted models and already-fused feature matrices. It does not
 reconcile `src.explainability.health` / `src.explainability.motor` onto the
-shared `src.explainability.common` layer (see `.claude/NEXT_TASKS.md`); it
-simply reuses whichever per-model explainability module already exists for
-each domain.
+shared `src.explainability.common` layer; it simply reuses whichever per-model
+explainability module already exists for each domain.
 
-Per CLAUDE.md section 9, `risk_category` is a decision-support label
-("low"/"medium"/"high"), never a fraud determination — the same caveat
-applies to every value this module returns.
+`risk_category` is a decision-support label ("low"/"medium"/"high"), never a
+fraud determination — the same caveat applies to every value this module returns.
 """
 from __future__ import annotations
 
@@ -43,9 +41,6 @@ from src.models.motor import MotorFraudModel
 HEALTH_DOMAIN = "health"
 MOTOR_DOMAIN = "motor"
 
-# Human-readable, non-accusatory labels for each risk category, matching the
-# language CLAUDE.md section 9 requires ("elevated risk", "flagged for
-# investigation") rather than any claim of proven fraud.
 RISK_CATEGORY_DESCRIPTIONS: dict[str, str] = {
     "low": "Low risk",
     "medium": "Elevated risk - review recommended",
@@ -131,7 +126,7 @@ class ClaimRiskAssessment:
     """The full decision-support output for one claim.
 
     `risk_category` and `top_factors` describe model behavior, not a fraud
-    determination (CLAUDE.md section 9) - a large positive `shap_value`
+    determination - a large positive `shap_value`
     means the model's prediction was sensitive to that feature, not that the
     feature proves fraud.
     """

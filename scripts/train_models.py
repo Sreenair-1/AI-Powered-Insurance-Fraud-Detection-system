@@ -5,14 +5,19 @@ The app (`app/`) only loads already-trained model artifacts (see
 This script is the one-time (or re-run-when-you-want-a-fresh-model) step
 that produces those artifacts.
 
-Both domains train on a bounded, seeded sample of the real raw data, not
-the full dataset -- kept bounded for training-run turnaround, not because
-graph centrality can't scale anymore (`src/graph/features.py`'s centrality
-now auto-switches to an approximate/cached computation above 1,500 graph
-nodes; see `docs/graph.md`). Increase `--motor-sample-size` /
-`--health-inpatient-sample-size` / `--health-outpatient-sample-size` for a
-better-fit (slower) model; `data/raw/` must be present locally either way
-(see `docs/data_contract.md`).
+Default sample sizes train on the full motor dataset (15,420 claims;
+`--motor-sample-size` default of 20,000 exceeds it, so `_sample()` uses all
+of it) and a 28,000-claim health sample (8,000 inpatient + 20,000
+outpatient, out of ~558K available) -- large enough to materially improve
+validation ROC-AUC/F1 over a small demo sample while still finishing in
+under two minutes combined on ordinary hardware, now that graph centrality
+scales (`src/graph/features.py` auto-switches to an approximate/cached
+computation above 1,500 graph nodes; see `docs/graph.md`). See
+`docs/model_training_experiment.md` for the experiment that established
+these defaults, including the smaller-sample numbers they replaced. Lower
+`--motor-sample-size` / `--health-inpatient-sample-size` /
+`--health-outpatient-sample-size` for a faster (weaker) model;
+`data/raw/` must be present locally either way (see `docs/data_contract.md`).
 
 Usage:
     ./.venv/Scripts/python.exe scripts/train_models.py --domain both
@@ -71,9 +76,9 @@ from src.models.persistence import save_health_model, save_motor_model
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "models"
 DEFAULT_SEED = 42
 
-DEFAULT_MOTOR_SAMPLE_SIZE = 3000
-DEFAULT_HEALTH_INPATIENT_SAMPLE_SIZE = 300
-DEFAULT_HEALTH_OUTPATIENT_SAMPLE_SIZE = 700
+DEFAULT_MOTOR_SAMPLE_SIZE = 20000
+DEFAULT_HEALTH_INPATIENT_SAMPLE_SIZE = 8000
+DEFAULT_HEALTH_OUTPATIENT_SAMPLE_SIZE = 20000
 
 EVAL_METRICS_FILENAME = "eval_metrics.json"
 CONFUSION_MATRIX_FILENAME = "confusion_matrix.json"

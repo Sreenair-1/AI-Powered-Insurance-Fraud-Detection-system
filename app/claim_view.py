@@ -9,9 +9,7 @@ supported for a selected claim:
   same as what the model was trained on).
 - `run_forensic_checks` + `rescore_with_forensics`: if the user uploads a
   document image for the claim, run ELA/copy-move/metadata on it and
-  re-fuse *just that claim* with the real forensic result, then re-score --
-  this is what CLAUDE.md means by forensic features feeding the risk-scoring
-  pipeline, not just being displayed next to it.
+  re-fuse *just that claim* with the real forensic result, then re-score.
 """
 from __future__ import annotations
 
@@ -108,8 +106,7 @@ def run_forensic_checks(image: object) -> ForensicUploadResult:
 
     `image` is a path or `PIL.Image` (anything `src.forensics.*` already
     accepts). A load/decode failure in one check does not block the other
-    two -- each is independently optional per CLAUDE.md's forensic-features
-    contract.
+    two -- each is independently optional.
     """
     try:
         ela = compute_ela(image)

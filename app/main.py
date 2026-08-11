@@ -5,8 +5,6 @@ Thin renderer over `app.model_loader` (persisted models), `app.data_loader`
 forensic re-scoring) -- see `docs/app_ui.md` for the full architecture and
 `docs/pipeline.md` for what `src/pipeline/inference.py` actually computes.
 
-Per CLAUDE.md section 9, every risk score/category/SHAP factor shown here
-describes model behavior, not a fraud determination.
 """
 from __future__ import annotations
 
@@ -46,7 +44,7 @@ def _render_header() -> None:
     st.caption(
         "Decision-support only. Risk scores and SHAP explanations describe model "
         "behavior, not proof of fraud -- a \"high\" result means **flagged for "
-        "investigation**, never a determination (see CLAUDE.md section 9)."
+        "investigation**, never a determination"
     )
 
 
@@ -127,7 +125,7 @@ def _render_graph_panel(dataset, claim_key: str) -> None:
     st.caption(
         "A high 'shared entities'/centrality value means this claim's "
         "provider/garage/bank-account etc. is also linked to other claims -- "
-        "evidence to weigh, not proof of a fraud ring (CLAUDE.md section 3)."
+        "evidence to weigh, not proof of a fraud ring."
     )
 
 
@@ -149,7 +147,7 @@ def _render_assessment(assessment) -> None:
     st.caption(
         "Positive SHAP contributions push the prediction toward higher fraud "
         "risk; negative contributions push it lower. This explains the "
-        "model's behavior, not a finding of fraud (CLAUDE.md section 3)."
+        "model's behavior, not a finding of fraud."
     )
 
 
