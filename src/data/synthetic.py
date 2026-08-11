@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from typing import Hashable, cast
 
 from src.data.loaders import load_demographics_reference, load_motor_claims
 from src.data.schemas import DATA_GENERATED_DIR
@@ -224,18 +225,18 @@ def inject_fraud_rings(
         deep_link_mask = rng.random_sample(config.ring_size) < config.linkage_strength
 
         for position, deep_link in zip(member_positions, deep_link_mask):
-            row_index = out.index[position]
-            out.at[row_index, GARAGE_ID_COL] = shared_garage
+            row_label = cast(Hashable, out.index[position])
+            out.at[row_label, GARAGE_ID_COL] = shared_garage
             if deep_link:
-                out.at[row_index, BANK_ACCOUNT_ID_COL] = shared_bank
-            out.at[row_index, RING_LABEL_COL] = 1
-            out.at[row_index, RING_ID_COL] = ring_id
+                out.at[row_label, BANK_ACCOUNT_ID_COL] = shared_bank
+            out.at[row_label, RING_LABEL_COL] = 1
+            out.at[row_label, RING_ID_COL] = ring_id
             ring_rows.append(
                 {
                     "ring_id": ring_id,
-                    "claim_row_index": row_index,
+                    "claim_row_index": row_label,
                     "garage_id": shared_garage,
-                    "bank_account_id": out.at[row_index, BANK_ACCOUNT_ID_COL],
+                    "bank_account_id": out.at[row_label, BANK_ACCOUNT_ID_COL],
                     "shares_bank_account": bool(deep_link),
                 }
             )
