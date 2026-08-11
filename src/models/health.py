@@ -118,9 +118,13 @@ class HealthFraudModel:
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         """Predicted class labels (0/1) for each row of `X`."""
         features = self._prepare(X)
-        return self.model.predict(features)
+        model = self.model
+        assert model is not None
+        return model.predict(features)
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         """Predicted fraud-risk probability (positive class) for each row of `X`."""
         features = self._prepare(X)
-        return self.model.predict_proba(features)[:, 1]
+        model = self.model
+        assert model is not None
+        return model.predict_proba(features)[:, 1]

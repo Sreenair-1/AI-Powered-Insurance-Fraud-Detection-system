@@ -106,7 +106,7 @@ def _coerce_object_columns_to_category(features: pd.DataFrame) -> pd.DataFrame:
 
 def _categorical_dtypes(features: pd.DataFrame) -> dict[str, pd.CategoricalDtype]:
     return {
-        col: dtype
+        str(col): dtype
         for col, dtype in features.dtypes.items()
         if isinstance(dtype, pd.CategoricalDtype)
     }
@@ -195,7 +195,9 @@ class MotorFraudModel:
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         """Return the predicted fraud probability (class 1) for each row of `X`."""
         features = self._prepare_inference_features(X)
-        return self._model.predict_proba(features)[:, 1]
+        model = self._model
+        assert model is not None 
+        return model.predict_proba(features)[:, 1]
 
     def predict(self, X: pd.DataFrame, threshold: float = 0.5) -> np.ndarray:
         """Return binary risk flags (1 = flagged high-risk) for each row of `X`."""
