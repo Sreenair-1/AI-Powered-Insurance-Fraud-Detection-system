@@ -156,3 +156,10 @@ def test_metadata_contains_expected_keys(tmp_path: Path) -> None:
     assert result.metadata["quality"] == 75
     assert result.metadata["scale"] == 5
     assert result.metadata["original_size"] == (64, 64)
+
+
+@pytest.mark.parametrize("fmt", ["PNG", "JPEG"])
+def test_metadata_original_format_from_path(tmp_path: Path, fmt: str) -> None:
+    path = _save(_make_image("RGB"), tmp_path, fmt)
+    result = compute_ela(path)
+    assert result.metadata["original_format"] == fmt
