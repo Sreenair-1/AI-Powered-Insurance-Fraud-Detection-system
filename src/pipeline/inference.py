@@ -114,7 +114,7 @@ def _top_factors_from_row(
         factors.append(
             {
                 "feature": feature,
-                "feature_value": raw_row[feature] if feature in raw_row.index else None,
+                "feature_value": raw_row.get(feature, None),
                 "shap_value": float(shap_row[i]),
             }
         )

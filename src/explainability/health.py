@@ -127,7 +127,10 @@ class HealthShapExplanation:
             "n_samples": self.n_samples,
             "base_value": self.base_value,
             "top_global_features": [
-                {"feature": row.feature, "mean_abs_shap_value": float(row.mean_abs_shap_value)}
+                {
+                    "feature": row.feature,
+                    "mean_abs_shap_value": float(np.asarray(row.mean_abs_shap_value).item()),
+                }
                 for row in global_df.itertuples(index=False)
             ],
         }

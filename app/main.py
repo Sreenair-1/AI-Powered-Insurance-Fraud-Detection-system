@@ -240,6 +240,8 @@ def main() -> None:
 
     claim_key = st.selectbox("Select a claim to review", claim_keys)
 
+    assert claim_key is not None
+
     _render_claim_info(domain, dataset, claim_key)
     _render_graph_panel(dataset, claim_key)
 

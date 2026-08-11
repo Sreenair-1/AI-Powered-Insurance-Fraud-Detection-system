@@ -14,7 +14,7 @@ supported for a selected claim:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Any, Optional, Union, cast
 
 import pandas as pd
 
@@ -68,9 +68,9 @@ def assess_claim(
             column, etc.) -- see `src/pipeline/inference.py`.
     """
     if domain == HEALTH_DOMAIN:
-        return assess_single_health_claim(model, X_row, thresholds, top_n)
+        return assess_single_health_claim(cast(HealthFraudModel, model), X_row, thresholds, top_n)
     if domain == MOTOR_DOMAIN:
-        return assess_single_motor_claim(model, X_row, thresholds, top_n)
+        return assess_single_motor_claim(cast(MotorFraudModel, model), X_row, thresholds, top_n)
     raise ClaimViewError(f"unknown domain {domain!r}; expected {HEALTH_DOMAIN!r} or {MOTOR_DOMAIN!r}")
 
 
@@ -101,7 +101,7 @@ class ForensicUploadResult:
         return self.ela is not None or self.copy_move is not None or self.metadata is not None
 
 
-def run_forensic_checks(image: object) -> ForensicUploadResult:
+def run_forensic_checks(image: Any) -> ForensicUploadResult:
     """Run ELA, copy-move, and metadata analysis on an uploaded claim document image.
 
     `image` is a path or `PIL.Image` (anything `src.forensics.*` already
