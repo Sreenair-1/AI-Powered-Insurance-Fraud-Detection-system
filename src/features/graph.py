@@ -37,19 +37,28 @@ _FILL_VALUES: dict[str, object] = {
 
 
 def build_graph_claim_features(
-    graph: nx.Graph, claim_keys: Iterable[str], claim_node_type: str = CLAIM_NODE_TYPE
+    graph: nx.Graph,
+    claim_keys: Iterable[str],
+    claim_node_type: str = CLAIM_NODE_TYPE,
+    **centrality_kwargs,
 ) -> pd.DataFrame:
     """Build a claim-keyed graph feature table aligned to `claim_keys`.
 
     Args:
         graph: A `networkx.Graph` built by `src.graph.construction`
-            (`build_health_graph` or `build_motor_graph`). Never mutated.
+            (`build_health_graph` or `build_motor_graph`). Never mutated
+            (structurally) — see `src.graph.features.compute_centrality_features`
+            for the one exception, its opt-in results cache.
         claim_keys: The full set of `claim_key` values the caller expects a
             feature row for (e.g. `structured_df[CLAIM_KEY_COL]`). Order is
             preserved in the output. Duplicates are not deduplicated by
             this function.
         claim_node_type: The node type to treat as a claim; passed through
             to `extract_claim_features`.
+        **centrality_kwargs: Forwarded to `extract_claim_features` ->
+            `compute_centrality_features`, e.g. `approximate=True` to force
+            approximate centrality on a graph under the size threshold, or
+            `betweenness_sample_size=`/`closeness_landmarks=` to tune it.
 
     Returns:
         One row per entry of `claim_keys`, columns `claim_key` plus every
@@ -73,7 +82,7 @@ def build_graph_claim_features(
         # call entirely and go straight to defaults for every claim_key.
         merged = template.copy()
     else:
-        raw = extract_claim_features(graph, claim_node_type=claim_node_type)
+        raw = extract_claim_features(graph, claim_node_type=claim_node_type, **centrality_kwargs)
         raw = raw.rename(columns={"node": CLAIM_KEY_COL})
         merged = template.merge(raw, on=CLAIM_KEY_COL, how="left")
 

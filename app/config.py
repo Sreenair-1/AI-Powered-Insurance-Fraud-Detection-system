@@ -5,13 +5,18 @@ Model artifact directories default to the already-gitignored top-level
 be overridden per-process via environment variables, so a deployment can
 point at a specific trained artifact without editing code.
 
-Sample sizes exist because `src/graph/features.py`'s betweenness centrality
-is an exact O(V*E) computation that does not scale to the full raw dataset
-sizes (15,420 motor claims / ~558k health claims) within an interactive
-session -- verified empirically before picking these defaults (see
-`docs/app_ui.md`). The app therefore works over a bounded, seeded sample by
-default; the training script (`scripts/train_models.py`) exposes the same
-knob for a larger, offline training run.
+Sample sizes exist because building/scoring over the full raw dataset sizes
+(15,420 motor claims / ~558k health claims) still means a much bigger
+feature-fusion + graph-construction pass than an interactive session wants,
+even though `src/graph/features.py`'s centrality no longer requires exact
+O(V*E) computation at that scale (it auto-switches to approximate/cached
+centrality above 1,500 graph nodes -- see `docs/graph.md`). Sampling here is
+about interactive responsiveness (claim-selection dropdowns, sidebar
+sliders), not working around a centrality scalability ceiling anymore --
+verified empirically before picking these defaults (see `docs/app_ui.md`).
+The app therefore works over a bounded, seeded sample by default; the
+training script (`scripts/train_models.py`) exposes the same knob for a
+larger, offline training run.
 """
 from __future__ import annotations
 

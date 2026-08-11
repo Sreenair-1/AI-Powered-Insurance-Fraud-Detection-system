@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
+    confusion_matrix,
     f1_score,
     precision_score,
     recall_score,
@@ -42,10 +43,68 @@ class ClassificationMetrics:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class ConfusionMatrix:
+    """Binary confusion matrix counts at one threshold.
+
+    Model-behavior diagnostic on a held-out split, same caveat as
+    `ClassificationMetrics`: describes the model, not any individual claim.
+    """
+
+    true_negative: int
+    false_positive: int
+    false_negative: int
+    true_positive: int
+    threshold: float
+
+    def to_dict(self) -> dict[str, float]:
+        """Flat dict representation, e.g. for logging or JSON output."""
+        return asdict(self)
+
+
 class FraudRiskModel(Protocol):
     """Structural type both `HealthFraudModel` and `MotorFraudModel` satisfy."""
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray: ...
+
+
+def _validate_and_derive_predictions(
+    y_true: Union[pd.Series, np.ndarray],
+    y_proba: Union[pd.Series, np.ndarray],
+    threshold: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Shared validation for `compute_classification_metrics`/`compute_confusion_matrix`.
+
+    Returns `(y_true_arr, y_proba_arr, y_pred)`.
+
+    Raises:
+        ValueError: if the inputs are empty, mismatched in length,
+            `threshold` is outside `[0, 1]`, `y_true` is not binary (0/1),
+            or `y_true` contains only one class.
+    """
+    y_true_arr = np.asarray(y_true)
+    y_proba_arr = np.asarray(y_proba, dtype=float)
+
+    if y_true_arr.shape[0] == 0:
+        raise ValueError("y_true has no samples")
+    if y_true_arr.shape[0] != y_proba_arr.shape[0]:
+        raise ValueError(
+            f"y_true has {y_true_arr.shape[0]} samples but y_proba has {y_proba_arr.shape[0]}"
+        )
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError(f"threshold must be in [0, 1], got {threshold}")
+
+    unique = set(np.unique(y_true_arr).tolist())
+    if not unique <= {0, 1}:
+        raise ValueError(f"y_true must be binary (0/1); got values {sorted(unique)}")
+    if len(unique) < 2:
+        raise ValueError(
+            "y_true must contain both classes (0 and 1) to compute these metrics; "
+            f"got only {sorted(unique)}"
+        )
+
+    y_pred = (y_proba_arr >= threshold).astype(int)
+    return y_true_arr, y_proba_arr, y_pred
 
 
 def compute_classification_metrics(
@@ -75,28 +134,7 @@ def compute_classification_metrics(
             or `y_true` contains only one class (ROC-AUC and
             precision/recall are undefined in that case).
     """
-    y_true_arr = np.asarray(y_true)
-    y_proba_arr = np.asarray(y_proba, dtype=float)
-
-    if y_true_arr.shape[0] == 0:
-        raise ValueError("y_true has no samples")
-    if y_true_arr.shape[0] != y_proba_arr.shape[0]:
-        raise ValueError(
-            f"y_true has {y_true_arr.shape[0]} samples but y_proba has {y_proba_arr.shape[0]}"
-        )
-    if not 0.0 <= threshold <= 1.0:
-        raise ValueError(f"threshold must be in [0, 1], got {threshold}")
-
-    unique = set(np.unique(y_true_arr).tolist())
-    if not unique <= {0, 1}:
-        raise ValueError(f"y_true must be binary (0/1); got values {sorted(unique)}")
-    if len(unique) < 2:
-        raise ValueError(
-            "y_true must contain both classes (0 and 1) to compute these metrics; "
-            f"got only {sorted(unique)}"
-        )
-
-    y_pred = (y_proba_arr >= threshold).astype(int)
+    y_true_arr, y_proba_arr, y_pred = _validate_and_derive_predictions(y_true, y_proba, threshold)
 
     return ClassificationMetrics(
         accuracy=float(accuracy_score(y_true_arr, y_pred)),
@@ -107,6 +145,40 @@ def compute_classification_metrics(
         threshold=threshold,
         n_samples=int(y_true_arr.shape[0]),
         n_positive=int((y_true_arr == 1).sum()),
+    )
+
+
+def compute_confusion_matrix(
+    y_true: Union[pd.Series, np.ndarray],
+    y_proba: Union[pd.Series, np.ndarray],
+    threshold: float = 0.5,
+) -> ConfusionMatrix:
+    """Compute a binary confusion matrix from labels and predicted probabilities.
+
+    Uses the same `y_proba >= threshold` label derivation as
+    `compute_classification_metrics` (see its docstring), so a
+    `ConfusionMatrix` and a `ClassificationMetrics` computed with the same
+    `threshold` are always consistent with each other.
+
+    Args:
+        y_true: True binary (0/1) labels.
+        y_proba: Predicted positive-class probabilities, same length/order
+            as `y_true` (e.g. `model.predict_proba(X)`).
+        threshold: Probability cutoff for the positive class, in `[0, 1]`.
+
+    Raises:
+        ValueError: same conditions as `compute_classification_metrics`.
+    """
+    y_true_arr, _y_proba_arr, y_pred = _validate_and_derive_predictions(y_true, y_proba, threshold)
+
+    tn, fp, fn, tp = confusion_matrix(y_true_arr, y_pred, labels=[0, 1]).ravel()
+
+    return ConfusionMatrix(
+        true_negative=int(tn),
+        false_positive=int(fp),
+        false_negative=int(fn),
+        true_positive=int(tp),
+        threshold=threshold,
     )
 
 
@@ -124,3 +196,19 @@ def evaluate_model(
     """
     y_proba = model.predict_proba(X)
     return compute_classification_metrics(y_true, y_proba, threshold=threshold)
+
+
+def evaluate_confusion_matrix(
+    model: FraudRiskModel,
+    X: pd.DataFrame,
+    y_true: Union[pd.Series, np.ndarray],
+    threshold: float = 0.5,
+) -> ConfusionMatrix:
+    """Score a fitted `HealthFraudModel` or `MotorFraudModel` on `(X, y_true)`.
+
+    Calls `model.predict_proba(X)` and scores the result with
+    `compute_confusion_matrix`. `X`/`y_true` should be a val or test split —
+    never the data the model was fit on.
+    """
+    y_proba = model.predict_proba(X)
+    return compute_confusion_matrix(y_true, y_proba, threshold=threshold)

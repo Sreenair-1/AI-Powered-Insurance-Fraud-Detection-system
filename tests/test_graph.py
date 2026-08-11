@@ -198,6 +198,91 @@ def test_shared_provider_has_higher_degree_centrality_than_isolated_claim_neighb
 
 
 # ---------------------------------------------------------------------------
+# Approximate / cached centrality (large-graph performance path)
+# ---------------------------------------------------------------------------
+
+
+def _synthetic_labeled_graph(n=40, seed=7):
+    graph = nx.gnm_random_graph(n, n * 2, seed=seed)
+    for i, node in enumerate(graph.nodes):
+        graph.nodes[node][construction.NODE_TYPE_ATTR] = "claim" if i % 4 == 0 else "provider"
+    return graph
+
+
+def test_approximate_closeness_centrality_matches_exact_with_full_landmark_coverage():
+    # With k == number of nodes, every node is a landmark, so the estimate
+    # (1 / mean distance to landmarks) reduces to the exact closeness
+    # formula on a connected graph -- validates the approximation math
+    # itself, independent of sampling noise.
+    graph = nx.path_graph(10)
+    exact = nx.closeness_centrality(graph)
+    approx = features._approximate_closeness_centrality(graph, k=graph.number_of_nodes(), seed=1)
+    for node in graph.nodes:
+        assert approx[node] == pytest.approx(exact[node], rel=1e-9)
+
+
+def test_approximate_closeness_centrality_empty_graph():
+    assert features._approximate_closeness_centrality(nx.Graph(), k=5, seed=1) == {}
+
+
+def test_compute_centrality_features_approximate_matches_exact_shape_and_columns():
+    graph = _synthetic_labeled_graph()
+    exact = features.compute_centrality_features(graph, approximate=False)
+    approx = features.compute_centrality_features(
+        graph, approximate=True, betweenness_sample_size=10, closeness_landmarks=10
+    )
+    assert set(exact.columns) == set(approx.columns)
+    assert len(exact) == len(approx) == graph.number_of_nodes()
+    assert approx["betweenness_centrality"].notna().all()
+    assert (approx["closeness_centrality"] >= 0).all()
+
+
+def test_compute_centrality_features_below_threshold_stays_exact_and_uncached():
+    graph = _synthetic_labeled_graph()
+    features.compute_centrality_features(graph, large_graph_threshold=graph.number_of_nodes() + 1)
+    assert features._CENTRALITY_CACHE_ATTR not in graph.graph
+
+
+def test_compute_centrality_features_above_threshold_auto_approximates_and_caches():
+    graph = _synthetic_labeled_graph()
+    features.compute_centrality_features(graph, large_graph_threshold=graph.number_of_nodes() - 1)
+    assert features._CENTRALITY_CACHE_ATTR in graph.graph
+    assert len(graph.graph[features._CENTRALITY_CACHE_ATTR]) == 1
+
+
+def test_compute_centrality_features_approximate_cache_hit_matches_first_call():
+    graph = _synthetic_labeled_graph()
+    first = features.compute_centrality_features(graph, approximate=True)
+    second = features.compute_centrality_features(graph, approximate=True)
+    pd.testing.assert_frame_equal(
+        first.sort_values("node").reset_index(drop=True),
+        second.sort_values("node").reset_index(drop=True),
+    )
+
+
+def test_compute_centrality_features_use_cache_false_bypasses_cache():
+    graph = _synthetic_labeled_graph()
+    features.compute_centrality_features(graph, approximate=True, use_cache=False)
+    assert features._CENTRALITY_CACHE_ATTR not in graph.graph
+
+
+def test_compute_centrality_features_approximate_forced_on_small_graph():
+    claims = _tiny_health_claims_df()
+    graph = construction.build_health_graph(claims)
+    result = features.compute_centrality_features(graph, approximate=True)
+    assert len(result) == graph.number_of_nodes()
+
+
+def test_extract_claim_features_forwards_centrality_kwargs():
+    claims = _tiny_health_claims_df()
+    graph = construction.build_health_graph(claims)
+    result = features.extract_claim_features(
+        graph, approximate=True, betweenness_sample_size=3, closeness_landmarks=3
+    )
+    assert len(result) == 6
+
+
+# ---------------------------------------------------------------------------
 # Community detection
 # ---------------------------------------------------------------------------
 

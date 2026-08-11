@@ -6,10 +6,10 @@ This script is the one-time (or re-run-when-you-want-a-fresh-model) step
 that produces those artifacts.
 
 Both domains train on a bounded, seeded sample of the real raw data, not
-the full dataset: `src/graph/features.py`'s betweenness centrality is an
-exact O(V*E) computation that does not finish in a reasonable time against
-the full 15,420 motor claims / ~558k health claims (verified empirically,
-see `docs/app_ui.md`). Increase `--motor-sample-size` /
+the full dataset -- kept bounded for training-run turnaround, not because
+graph centrality can't scale anymore (`src/graph/features.py`'s centrality
+now auto-switches to an approximate/cached computation above 1,500 graph
+nodes; see `docs/graph.md`). Increase `--motor-sample-size` /
 `--health-inpatient-sample-size` / `--health-outpatient-sample-size` for a
 better-fit (slower) model; `data/raw/` must be present locally either way
 (see `docs/data_contract.md`).
@@ -21,11 +21,14 @@ Usage:
         --health-inpatient-sample-size 400 --health-outpatient-sample-size 900
 
 Writes, per domain, into `<output-dir>/<domain>/`:
-    model.json         -- via src.models.persistence
-    metadata.json       -- via src.models.persistence
-    eval_metrics.json   -- Accuracy/Precision/Recall/F1/ROC-AUC on a held-out
-                            validation split (src.models.evaluation), read by
-                            app/model_loader.py's load_eval_metrics()
+    model.json           -- via src.models.persistence
+    metadata.json         -- via src.models.persistence
+    eval_metrics.json     -- Accuracy/Precision/Recall/F1/ROC-AUC on a held-out
+                              validation split (src.models.evaluation), read by
+                              app/model_loader.py's load_eval_metrics()
+    confusion_matrix.json -- TN/FP/FN/TP on the same held-out validation split
+                              (src.models.evaluation.evaluate_confusion_matrix);
+                              not read by the app today, informational only.
 """
 from __future__ import annotations
 
@@ -55,7 +58,12 @@ from src.data.splits import assign_claims_to_provider_splits, split_dataframe, s
 from src.data.synthetic import build_motor_synthetic_augmentation
 from src.features.fusion import fuse_health_claims, fuse_motor_claims
 from src.features.structured import CLAIM_KEY_COL
-from src.models.evaluation import ClassificationMetrics, evaluate_model
+from src.models.evaluation import (
+    ClassificationMetrics,
+    ConfusionMatrix,
+    evaluate_confusion_matrix,
+    evaluate_model,
+)
 from src.models.health import HealthFraudModel
 from src.models.motor import MotorFraudModel
 from src.models.persistence import save_health_model, save_motor_model
@@ -68,6 +76,7 @@ DEFAULT_HEALTH_INPATIENT_SAMPLE_SIZE = 300
 DEFAULT_HEALTH_OUTPATIENT_SAMPLE_SIZE = 700
 
 EVAL_METRICS_FILENAME = "eval_metrics.json"
+CONFUSION_MATRIX_FILENAME = "confusion_matrix.json"
 
 
 def _sample(df: pd.DataFrame, n: Optional[int], seed: int) -> pd.DataFrame:
@@ -81,6 +90,14 @@ def _write_eval_metrics(directory: Path, metrics: Optional[ClassificationMetrics
         return
     (directory / EVAL_METRICS_FILENAME).write_text(
         json.dumps(metrics.to_dict(), indent=2), encoding="utf-8"
+    )
+
+
+def _write_confusion_matrix(directory: Path, confusion: Optional[ConfusionMatrix]) -> None:
+    if confusion is None:
+        return
+    (directory / CONFUSION_MATRIX_FILENAME).write_text(
+        json.dumps(confusion.to_dict(), indent=2), encoding="utf-8"
     )
 
 
@@ -110,13 +127,16 @@ def train_motor(output_dir: Path, sample_size: int, seed: int) -> None:
     model.fit(X[train_mask], y[train_mask])
 
     metrics = evaluate_model(model, X[val_mask], y[val_mask]) if val_mask.any() else None
+    confusion = evaluate_confusion_matrix(model, X[val_mask], y[val_mask]) if val_mask.any() else None
     if metrics is not None:
         print(f"[motor] validation metrics ({int(val_mask.sum())} claims): {metrics.to_dict()}")
+        print(f"[motor] confusion matrix: {confusion.to_dict()}")
     else:
         print("[motor] no validation claims available -- skipping evaluation")
 
     out_dir = save_motor_model(model, output_dir)
     _write_eval_metrics(out_dir, metrics)
+    _write_confusion_matrix(out_dir, confusion)
     print(f"[motor] saved model to {out_dir}")
 
 
@@ -159,13 +179,16 @@ def train_health(
     model.fit(X[train_mask], y[train_mask])
 
     metrics = evaluate_model(model, X[val_mask], y[val_mask]) if val_mask.any() else None
+    confusion = evaluate_confusion_matrix(model, X[val_mask], y[val_mask]) if val_mask.any() else None
     if metrics is not None:
         print(f"[health] validation metrics ({int(val_mask.sum())} claims): {metrics.to_dict()}")
+        print(f"[health] confusion matrix: {confusion.to_dict()}")
     else:
         print("[health] no validation claims available -- skipping evaluation")
 
     out_dir = save_health_model(model, output_dir)
     _write_eval_metrics(out_dir, metrics)
+    _write_confusion_matrix(out_dir, confusion)
     print(f"[health] saved model to {out_dir}")
 
 

@@ -10,6 +10,7 @@ data/*
 !data/.gitkeep
 models/*
 !models/.gitkeep
+models_experiments/
 
 # Notebooks checkpoints
 .ipynb_checkpoints/

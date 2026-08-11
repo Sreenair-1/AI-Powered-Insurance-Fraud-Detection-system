@@ -11,7 +11,10 @@ import pytest
 from src.features.structured import CLAIM_KEY_COL
 from src.models.evaluation import (
     ClassificationMetrics,
+    ConfusionMatrix,
     compute_classification_metrics,
+    compute_confusion_matrix,
+    evaluate_confusion_matrix,
     evaluate_model,
 )
 from src.models.health import HealthFraudModel
@@ -220,3 +223,136 @@ def test_evaluate_model_with_fitted_motor_model():
     assert isinstance(metrics, ClassificationMetrics)
     assert metrics.n_samples == len(X)
     assert 0.0 <= metrics.roc_auc <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# compute_confusion_matrix — correctness on known inputs
+# ---------------------------------------------------------------------------
+
+
+def test_confusion_matrix_matches_hand_computed_counts():
+    # Same fixture as test_known_confusion_matrix_matches_hand_computed_metrics:
+    # TP=2, FN=1, FP=1, TN=4.
+    y_true = pd.Series([0, 0, 0, 0, 0, 1, 1, 1])
+    y_proba = np.array([0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.3])
+    cm = compute_confusion_matrix(y_true, y_proba)
+    assert cm.true_negative == 4
+    assert cm.false_positive == 1
+    assert cm.false_negative == 1
+    assert cm.true_positive == 2
+    assert cm.threshold == pytest.approx(0.5)
+
+
+def test_confusion_matrix_perfect_predictions():
+    y_true = pd.Series([0, 0, 0, 1, 1, 1])
+    y_proba = np.array([0.05, 0.1, 0.2, 0.8, 0.9, 0.95])
+    cm = compute_confusion_matrix(y_true, y_proba)
+    assert (cm.true_negative, cm.false_positive, cm.false_negative, cm.true_positive) == (3, 0, 0, 3)
+
+
+def test_confusion_matrix_counts_sum_to_n_samples():
+    y_true = pd.Series([0, 0, 0, 1, 1])
+    y_proba = np.array([0.1, 0.2, 0.3, 0.6, 0.7])
+    cm = compute_confusion_matrix(y_true, y_proba)
+    total = cm.true_negative + cm.false_positive + cm.false_negative + cm.true_positive
+    assert total == len(y_true)
+
+
+def test_confusion_matrix_threshold_changes_counts():
+    y_true = pd.Series([0, 0, 1, 1])
+    y_proba = np.array([0.3, 0.4, 0.6, 0.45])
+    low = compute_confusion_matrix(y_true, y_proba, threshold=0.2)
+    high = compute_confusion_matrix(y_true, y_proba, threshold=0.9)
+    assert low.false_negative == 0
+    assert high.true_positive == 0
+
+
+def test_confusion_matrix_returns_confusion_matrix_instance_and_to_dict():
+    y_true = pd.Series([0, 1])
+    y_proba = np.array([0.1, 0.9])
+    cm = compute_confusion_matrix(y_true, y_proba)
+    assert isinstance(cm, ConfusionMatrix)
+    d = cm.to_dict()
+    assert set(d.keys()) == {
+        "true_negative",
+        "false_positive",
+        "false_negative",
+        "true_positive",
+        "threshold",
+    }
+
+
+# ---------------------------------------------------------------------------
+# compute_confusion_matrix — validation errors (shared with compute_classification_metrics)
+# ---------------------------------------------------------------------------
+
+
+def test_confusion_matrix_empty_inputs_raise():
+    with pytest.raises(ValueError):
+        compute_confusion_matrix(pd.Series([], dtype=int), np.array([]))
+
+
+def test_confusion_matrix_mismatched_length_raises():
+    with pytest.raises(ValueError):
+        compute_confusion_matrix(pd.Series([0, 1, 1]), np.array([0.1, 0.9]))
+
+
+@pytest.mark.parametrize("threshold", [-0.1, 1.1])
+def test_confusion_matrix_out_of_range_threshold_raises(threshold):
+    with pytest.raises(ValueError):
+        compute_confusion_matrix(pd.Series([0, 1]), np.array([0.1, 0.9]), threshold=threshold)
+
+
+def test_confusion_matrix_non_binary_y_true_raises():
+    with pytest.raises(ValueError):
+        compute_confusion_matrix(pd.Series([0, 1, 2]), np.array([0.1, 0.5, 0.9]))
+
+
+def test_confusion_matrix_single_class_y_true_raises():
+    with pytest.raises(ValueError):
+        compute_confusion_matrix(pd.Series([0, 0, 0]), np.array([0.1, 0.2, 0.3]))
+
+
+# ---------------------------------------------------------------------------
+# evaluate_confusion_matrix — generic wrapper over any predict_proba(X) model
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_confusion_matrix_uses_predict_proba():
+    X = pd.DataFrame({"a": [1, 2, 3, 4]})
+    y_true = pd.Series([0, 0, 1, 1])
+    model = _StubModel(np.array([0.1, 0.2, 0.8, 0.9]))
+    cm = evaluate_confusion_matrix(model, X, y_true)
+    assert (cm.true_negative, cm.false_positive, cm.false_negative, cm.true_positive) == (2, 0, 0, 2)
+
+
+def test_evaluate_confusion_matrix_with_fitted_health_model():
+    X, y = _synthetic_health_features()
+    model = HealthFraudModel().fit(X, y)
+    cm = evaluate_confusion_matrix(model, X, y)
+    assert isinstance(cm, ConfusionMatrix)
+    total = cm.true_negative + cm.false_positive + cm.false_negative + cm.true_positive
+    assert total == len(X)
+
+
+def test_evaluate_confusion_matrix_with_fitted_motor_model():
+    X, y = _synthetic_motor_features()
+    model = MotorFraudModel().fit(X, y)
+    cm = evaluate_confusion_matrix(model, X, y)
+    assert isinstance(cm, ConfusionMatrix)
+    total = cm.true_negative + cm.false_positive + cm.false_negative + cm.true_positive
+    assert total == len(X)
+
+
+def test_confusion_matrix_and_classification_metrics_are_consistent():
+    y_true = pd.Series([0, 0, 0, 0, 0, 1, 1, 1])
+    y_proba = np.array([0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.3])
+    cm = compute_confusion_matrix(y_true, y_proba)
+    metrics = compute_classification_metrics(y_true, y_proba)
+    n = cm.true_negative + cm.false_positive + cm.false_negative + cm.true_positive
+    accuracy = (cm.true_negative + cm.true_positive) / n
+    assert accuracy == pytest.approx(metrics.accuracy)
+    precision = cm.true_positive / (cm.true_positive + cm.false_positive)
+    assert precision == pytest.approx(metrics.precision)
+    recall = cm.true_positive / (cm.true_positive + cm.false_negative)
+    assert recall == pytest.approx(metrics.recall)
