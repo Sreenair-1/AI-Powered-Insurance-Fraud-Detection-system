@@ -4,7 +4,6 @@ B.Tech project: a decision-support system that flags potentially fraudulent
 health and motor insurance claims by combining document forensics, graph
 relationship analytics, and an explainable ML risk score.
 
-See [CLAUDE.md](CLAUDE.md) for the full engineering contract and scope.
 See `.claude/SESSION_STATE.md`, `.claude/WORK_LOG.md`, and
 `.claude/NEXT_TASKS.md` for current project status.
 
