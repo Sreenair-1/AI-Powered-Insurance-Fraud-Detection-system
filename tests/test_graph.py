@@ -37,9 +37,13 @@ def _tiny_motor_claims_df(n=30):
     )
 
 
-def _augmented_motor_claims_df(n=30, num_rings=2, ring_size=3):
+def _augmented_motor_claims_df(
+    n=30, num_rings=2, ring_size=3, garage_pool_ratio=0.05, bank_pool_ratio=0.08
+):
     claims = _tiny_motor_claims_df(n)
-    with_entities = assign_synthetic_entities(claims, seed=42)
+    with_entities = assign_synthetic_entities(
+        claims, seed=42, garage_pool_ratio=garage_pool_ratio, bank_pool_ratio=bank_pool_ratio
+    )
     augmented, ring_assignments = inject_fraud_rings(
         with_entities, config=FraudRingConfig(num_rings=num_rings, ring_size=ring_size, seed=42)
     )
@@ -144,7 +148,7 @@ def test_build_motor_graph_does_not_mutate_source():
 
 
 def test_build_motor_graph_carries_ring_labels_as_node_attrs():
-    augmented, _ = _augmented_motor_claims_df(n=30, num_rings=2, ring_size=4)
+    augmented, _ = _augmented_motor_claims_df(n=30, num_rings=2, ring_size=3)
     graph = construction.build_motor_graph(augmented)
     ring_member_claim = augmented[augmented[RING_LABEL_COL] == 1].index[0]
     claim_node = construction._node_id(construction.CLAIM_NODE_TYPE, ring_member_claim)
@@ -272,7 +276,13 @@ def test_extract_claim_features_only_returns_claim_rows():
 
 
 def test_injected_ring_members_recover_higher_shared_entity_degree_than_non_members():
-    augmented, ring_assignments = _augmented_motor_claims_df(n=60, num_rings=3, ring_size=6)
+    # Sparse baseline entity pools (most claims get a near-unique garage/bank)
+    # so the deliberately shared ring entities stand out against the
+    # background collision rate, isolating the ring signal from baseline
+    # pool-size noise.
+    augmented, ring_assignments = _augmented_motor_claims_df(
+        n=60, num_rings=3, ring_size=4, garage_pool_ratio=0.9, bank_pool_ratio=0.9
+    )
     graph = construction.build_motor_graph(augmented)
     claim_features = features.extract_claim_features(graph)
 
@@ -286,7 +296,7 @@ def test_injected_ring_members_recover_higher_shared_entity_degree_than_non_memb
 
 
 def test_injected_ring_members_cluster_into_shared_communities():
-    augmented, ring_assignments = _augmented_motor_claims_df(n=60, num_rings=3, ring_size=6)
+    augmented, ring_assignments = _augmented_motor_claims_df(n=60, num_rings=3, ring_size=4)
     graph = construction.build_motor_graph(augmented)
     communities = features.detect_communities(graph)
 
