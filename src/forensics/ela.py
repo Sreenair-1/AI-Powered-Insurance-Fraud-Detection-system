@@ -80,6 +80,7 @@ def _load_image(image: ImageInput) -> Image.Image:
             with Image.open(path) as opened:
                 opened.load()
                 img = opened.copy()
+                img.format = opened.format
         except UnidentifiedImageError as exc:
             raise ImageLoadError(f"Could not identify image file: {path}") from exc
         except OSError as exc:
