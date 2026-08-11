@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from src.data.schemas import HEALTH_CLAIM_LABEL_PROVIDER_DERIVED_COL
+from src.explainability.common import ExplainabilityError
 from src.explainability.health import (
     HealthExplainabilityError,
     HealthShapExplanation,
@@ -111,6 +112,17 @@ def test_explain_health_claims_ignores_extra_label_column(fitted_model_and_data)
     X_with_label[HEALTH_CLAIM_LABEL_PROVIDER_DERIVED_COL] = 1
     explanation = explain_health_claims(model, X_with_label)
     assert HEALTH_CLAIM_LABEL_PROVIDER_DERIVED_COL not in explanation.feature_names
+
+
+# ---------------------------------------------------------------------------
+# Reconciliation with src/explainability/common.py
+# ---------------------------------------------------------------------------
+
+
+def test_health_explainability_error_is_common_explainability_error():
+    """health.py delegates to common.py; its error type must remain
+    catchable under the shared `ExplainabilityError` base."""
+    assert issubclass(HealthExplainabilityError, ExplainabilityError)
 
 
 # ---------------------------------------------------------------------------

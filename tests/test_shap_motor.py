@@ -126,6 +126,60 @@ def test_works_on_a_row_subset_not_seen_together_at_fit_time(fitted_model_and_da
 
 
 # ---------------------------------------------------------------------------
+# Reconciliation with src.explainability.common: categorical dtype handling
+# (fit-time category set re-applied, unseen category -> NaN) must survive
+# delegating explainer/normalization logic to common.create_tree_explainer /
+# common.explain_local.
+# ---------------------------------------------------------------------------
+
+
+def test_unseen_category_becomes_missing_and_explanation_still_succeeds(fitted_model_and_data):
+    model, X, _ = fitted_model_and_data
+    X_new = X.copy()
+    X_new["GarageID"] = X_new["GarageID"].astype("category")
+    X_new["GarageID"] = X_new["GarageID"].cat.add_categories(["UNSEEN_GARAGE"])
+    X_new.loc[X_new.index[0], "GarageID"] = "UNSEEN_GARAGE"
+
+    explanation = explain_motor_claims(model, X_new)
+
+    assert explanation.shap_values.shape == (len(X_new), len(model.feature_columns))
+    assert np.all(np.isfinite(explanation.shap_values))
+    assert np.isfinite(explanation.base_value)
+
+
+def test_explain_motor_claims_delegates_to_common_layer(fitted_model_and_data, monkeypatch):
+    """`explain_motor_claims` must build its explainer/SHAP values through
+    `src.explainability.common` (`create_tree_explainer`/`explain_local`),
+    not a duplicated `shap.TreeExplainer` call of its own — spies on both
+    functions to confirm they're actually invoked, not just structurally
+    importable.
+    """
+    from src.explainability import common
+
+    model, X, _ = fitted_model_and_data
+    calls = {"create_tree_explainer": 0, "explain_local": 0}
+
+    real_create_tree_explainer = common.create_tree_explainer
+    real_explain_local = common.explain_local
+
+    def spy_create_tree_explainer(estimator):
+        calls["create_tree_explainer"] += 1
+        return real_create_tree_explainer(estimator)
+
+    def spy_explain_local(explainer, X_, feature_names, claim_keys=None):
+        calls["explain_local"] += 1
+        return real_explain_local(explainer, X_, feature_names, claim_keys=claim_keys)
+
+    monkeypatch.setattr(common, "create_tree_explainer", spy_create_tree_explainer)
+    monkeypatch.setattr(common, "explain_local", spy_explain_local)
+
+    explain_motor_claims(model, X)
+
+    assert calls["create_tree_explainer"] == 1
+    assert calls["explain_local"] == 1
+
+
+# ---------------------------------------------------------------------------
 # SHAP values reconstruct the model's own predictions (margin/log-odds space)
 # ---------------------------------------------------------------------------
 

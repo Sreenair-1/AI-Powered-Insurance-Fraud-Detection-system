@@ -1,9 +1,10 @@
 """SHAP-based explainability for the fitted motor fraud risk model.
 
-Wraps a fitted `MotorFraudModel` (`src.models.motor`) with
-`shap.TreeExplainer` to produce global feature importance and per-claim
-local explanations. This module never fits or refits a model — it only
-reads a model already trained via `MotorFraudModel.fit()`.
+Wraps a fitted `MotorFraudModel` (`src.models.motor`) with the shared
+model-agnostic SHAP layer (`src.explainability.common`) to produce global
+feature importance and per-claim local explanations. This module never
+fits or refits a model — it only reads a model already trained via
+`MotorFraudModel.fit()`.
 
 SHAP values explain *model behavior* (which features pushed a given
 prediction up or down), never a fraud determination. A claim with a large positive SHAP total is
@@ -13,6 +14,16 @@ SHAP values here are in the model's raw margin (log-odds) space, matching
 `shap.TreeExplainer`'s default output for an XGBoost binary classifier —
 `sigmoid(base_value + shap_values[row].sum())` reproduces
 `model.predict_proba(X)[row]` (verified in `tests/test_shap_motor.py`).
+
+Reconciliation with `src.explainability.common`: `explain_motor_claims`
+still prepares `X` via `MotorFraudModel._prepare_inference_features()`
+rather than `common.prepare_features_for_shap` — that private helper is
+the only place the fit-time categorical dtype set (unseen category ->
+`NaN`) is re-applied, and `common.py` deliberately knows nothing about
+either model wrapper's categorical handling (see `docs/shap.md`). Once
+`X` is prepared, explainer construction and SHAP value/base-value
+normalization are delegated to `common.create_tree_explainer` /
+`common.explain_local` instead of duplicating that logic here.
 """
 from __future__ import annotations
 
@@ -21,47 +32,10 @@ from typing import Union
 
 import numpy as np
 import pandas as pd
-import shap
 
+from src.explainability import common
 from src.features.structured import CLAIM_KEY_COL
 from src.models.motor import MotorFraudModel, MotorModelError
-
-
-def _positive_class_shap_array(raw_shap: object, n_features: int) -> np.ndarray:
-    """Normalize `shap.TreeExplainer.shap_values()` output to a `(n_rows, n_features)` array.
-
-    Different shap/xgboost version combinations have returned a binary
-    classifier's SHAP values either as a single `(n_rows, n_features)`
-    array (positive class only, the current shap behavior) or as a
-    `[negative_class, positive_class]` list of two such arrays (older
-    behavior). Both are normalized to the positive-class array here so the
-    rest of this module doesn't need to know which one it's running
-    against.
-    """
-    if isinstance(raw_shap, list):
-        if len(raw_shap) != 2:
-            raise MotorModelError(
-                f"expected a 2-element [negative_class, positive_class] SHAP value list "
-                f"for a binary classifier, got {len(raw_shap)} elements"
-            )
-        arr = np.asarray(raw_shap[1])
-    else:
-        arr = np.asarray(raw_shap)
-        if arr.ndim == 3:
-            arr = arr[..., -1]
-
-    if arr.ndim != 2 or arr.shape[1] != n_features:
-        raise MotorModelError(
-            f"unexpected SHAP value shape {arr.shape}; expected (n_rows, {n_features})"
-        )
-    return arr
-
-
-def _positive_class_base_value(explainer: "shap.TreeExplainer") -> float:
-    base_value = explainer.expected_value
-    if isinstance(base_value, (list, np.ndarray)):
-        base_value = base_value[-1] if len(base_value) > 1 else base_value[0]
-    return float(base_value)
 
 
 @dataclass(frozen=True)
@@ -156,6 +130,9 @@ def explain_motor_claims(
     actually sees at inference time. Column reordering/validation and
     `claim_key` handling are therefore governed entirely by
     `MotorFraudModel`'s own feature contract, not reimplemented here.
+    Explainer construction and SHAP value/base-value normalization are
+    delegated to `src.explainability.common` (`create_tree_explainer`,
+    `explain_local`) rather than duplicated in this module.
 
     Args:
         model: a `MotorFraudModel` that has already been `.fit()`.
@@ -186,14 +163,24 @@ def explain_motor_claims(
         # rather than a silent `None` fallback.
         raise MotorModelError(f"X must contain a '{CLAIM_KEY_COL}' column")
 
-    explainer = shap.TreeExplainer(model._model)  # noqa: SLF001
-    raw_shap_values = explainer.shap_values(features)
-    shap_values = _positive_class_shap_array(raw_shap_values, n_features=features.shape[1])
-    base_value = _positive_class_base_value(explainer)
+    feature_names = list(features.columns)
+    explainer = common.create_tree_explainer(model._model)  # noqa: SLF001
+    # `features` already carries the fit-time categorical dtypes re-applied
+    # by `_prepare_inference_features` and is already ordered/filtered onto
+    # `feature_names`, so `common.explain_local`'s own alignment step
+    # (drop claim_key/leakage columns, reindex) is a no-op here — it just
+    # supplies the shared, tested SHAP-value/base-value normalization.
+    local_explanations = common.explain_local(
+        explainer, features, feature_names, claim_keys=claim_keys
+    )
+    shap_values = np.array(
+        [[le.feature_contributions[name] for name in feature_names] for le in local_explanations]
+    )
+    base_value = local_explanations[0].base_value
 
     return MotorShapExplanation(
         shap_values=shap_values,
         base_value=base_value,
-        feature_names=list(features.columns),
+        feature_names=feature_names,
         claim_keys=claim_keys,
     )

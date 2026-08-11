@@ -1,25 +1,26 @@
 """SHAP explainability for the health fraud risk model.
 
-Wraps `shap.TreeExplainer` around an already-fitted
-`src.models.health.HealthFraudModel` to produce global feature
-importance and per-claim local explanations. Never retrains or refits
-the model — every function here only reads `model.model` (the fitted
-`XGBClassifier`) and `model.feature_names_`.
+Thin `HealthFraudModel`-specific wrapper around the shared, model-agnostic
+SHAP layer in `src.explainability.common`. Never retrains or refits the
+model — every function here only reads `model.model` (the fitted
+`XGBClassifier`) and `model.feature_names_`, and delegates explainer
+construction, feature alignment, and SHAP computation to
+`create_tree_explainer()` / `explain_local()` / `explain_one()`
+(`src/explainability/common.py`) rather than calling `shap.TreeExplainer`
+directly or re-implementing feature alignment.
 
 SHAP values are computed in the model's native margin (log-odds) output
 space, so `base_value + sum(shap_values for a row) == raw model margin`
 for that row (the standard additive SHAP guarantee for
-`shap.TreeExplainer` on a tree-ensemble classifier). Predicted
-probabilities are reported separately (via `model.predict_proba`) for
-UI display, not derived from the SHAP values themselves.
+`shap.TreeExplainer` on a tree-ensemble classifier — see `docs/shap.md`).
+Predicted probabilities are reported separately (via `model.predict_proba`)
+for UI display, not derived from the SHAP values themselves.
 
-Feature alignment mirrors `HealthFraudModel._prepare` exactly: `claim_key`
-is dropped (row identifier, not a feature) and the remaining columns are
-reindexed onto `model.feature_names_`, the exact order fixed at fit time.
-This also guarantees `claim_fraud_label_provider_derived` can never reach
-SHAP as a feature, since `HealthFraudModel.fit()` never includes it in
-`feature_names_` in the first place, and any extra column on the input
-`X` that isn't in `feature_names_` is simply dropped here.
+Feature alignment is exactly `common.prepare_features_for_shap`'s
+contract: `claim_key` and any known leakage/target column (including
+`claim_fraud_label_provider_derived`) are dropped, then the remaining
+columns are reindexed onto `model.feature_names_` — the exact column set
+and order fixed at fit time.
 
 This module supports an academic decision-support system, not an
 autonomous fraud adjudication system: SHAP values explain what the
@@ -33,70 +34,42 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-import shap
 
+from src.explainability.common import (
+    ExplainabilityError,
+    create_tree_explainer,
+    explain_local,
+    explain_one,
+)
 from src.features.structured import CLAIM_KEY_COL
-from src.data.schemas import HEALTH_CLAIM_LABEL_PROVIDER_DERIVED_COL
 from src.models.health import HealthFraudModel
 
 
-class HealthExplainabilityError(ValueError):
-    """Raised for invalid input/state when explaining a HealthFraudModel."""
+class HealthExplainabilityError(ExplainabilityError):
+    """Raised for invalid input/state when explaining a HealthFraudModel.
 
-
-def _prepare_features(model: HealthFraudModel, X: pd.DataFrame) -> pd.DataFrame:
-    """Reindex `X` onto `model.feature_names_`, preserving fitted feature order.
-
-    Mirrors `HealthFraudModel._prepare` exactly (duplicated rather than
-    calling that private method directly, so this module doesn't depend on
-    another module's private implementation detail) — same drop-`claim_key`
-    then reindex-onto-`feature_names_` behavior, same errors.
+    Subclasses `src.explainability.common.ExplainabilityError` (rather than
+    `ValueError` directly) so this module's errors also satisfy
+    `except ExplainabilityError` at a call site that doesn't care which
+    model produced them.
     """
+
+
+def _require_fitted(model: HealthFraudModel) -> list[str]:
+    """Return `model.feature_names_` as a list, or raise if unfitted."""
     if model.model is None or model.feature_names_ is None:
         raise HealthExplainabilityError(
             "HealthFraudModel must be fit() before it can be explained"
         )
-    features = X.drop(columns=[CLAIM_KEY_COL]) if CLAIM_KEY_COL in X.columns else X
-    missing = set(model.feature_names_) - set(features.columns)
-    if missing:
-        raise HealthExplainabilityError(
-            f"X is missing feature column(s) seen at fit time: {sorted(missing)}"
-        )
-    features = features[model.feature_names_]
-    if HEALTH_CLAIM_LABEL_PROVIDER_DERIVED_COL in features.columns:
-        # Cannot happen via the reindex above (fit() never puts the label in
-        # feature_names_), but guarded explicitly since this rule is safety-
-        # critical: the label must never reach SHAP as a feature.
-        raise HealthExplainabilityError(
-            f"{HEALTH_CLAIM_LABEL_PROVIDER_DERIVED_COL!r} must never be used as a feature"
-        )
-    return features
+    return list(model.feature_names_)
 
 
-def _normalize_shap_output(raw_shap_values: object, expected_value: object) -> tuple[np.ndarray, float]:
-    """Normalize `TreeExplainer` output across shap's binary-classifier shapes.
-
-    Different shap versions have returned binary-classification output as
-    either a single `(n_samples, n_features)` array (installed version,
-    shap 0.52) or a `[negative_class, positive_class]` list of arrays
-    (older versions). Either way we want the positive-class contributions
-    as one `(n_samples, n_features)` array and a matching scalar base
-    value.
-    """
-    if isinstance(raw_shap_values, list):
-        shap_values = np.asarray(raw_shap_values[-1])
-    else:
-        shap_values = np.asarray(raw_shap_values)
-    if shap_values.ndim == 3:
-        # (n_samples, n_features, n_outputs) -> take the positive class.
-        shap_values = shap_values[:, :, -1]
-
-    if isinstance(expected_value, (list, tuple, np.ndarray)):
-        base_value = float(np.asarray(expected_value).reshape(-1)[-1])
-    else:
-        base_value = float(expected_value)
-
-    return shap_values, base_value
+def _explainer_for(model: HealthFraudModel):
+    """`create_tree_explainer(model.model)`, with errors re-typed to `HealthExplainabilityError`."""
+    try:
+        return create_tree_explainer(model.model)
+    except ExplainabilityError as exc:
+        raise HealthExplainabilityError(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -173,18 +146,24 @@ def explain_health_claims(model: HealthFraudModel, X: pd.DataFrame) -> HealthSha
         HealthExplainabilityError: if `model` has not been fit, or `X` is
             missing a feature column the model was fit on.
     """
-    features = _prepare_features(model, X)
-    assert model.model is not None  # narrowed by _prepare_features
+    feature_names = _require_fitted(model)
+    explainer = _explainer_for(model)
 
-    explainer = shap.TreeExplainer(model.model)
-    raw_shap_values = explainer.shap_values(features)
-    shap_values, base_value = _normalize_shap_output(raw_shap_values, explainer.expected_value)
+    try:
+        local_explanations = explain_local(explainer, X, feature_names)
+    except ExplainabilityError as exc:
+        raise HealthExplainabilityError(str(exc)) from exc
+
+    shap_values = np.array(
+        [[le.feature_contributions[name] for name in feature_names] for le in local_explanations]
+    )
+    base_value = local_explanations[0].base_value
 
     predicted_proba = model.predict_proba(X)
     claim_keys = tuple(X[CLAIM_KEY_COL]) if CLAIM_KEY_COL in X.columns else None
 
     return HealthShapExplanation(
-        feature_names=tuple(model.feature_names_),
+        feature_names=tuple(feature_names),
         shap_values=shap_values,
         base_value=base_value,
         predicted_proba=predicted_proba,
@@ -206,27 +185,31 @@ def explain_single_health_claim(model: HealthFraudModel, X_row: pd.DataFrame) ->
     `contributions` is sorted by descending `|shap_value|` (strongest
     factors first).
     """
-    if len(X_row) != 1:
-        raise HealthExplainabilityError(f"X_row must contain exactly one row, got {len(X_row)}")
+    if not isinstance(X_row, pd.DataFrame) or len(X_row) != 1:
+        n = len(X_row) if isinstance(X_row, pd.DataFrame) else "N/A"
+        raise HealthExplainabilityError(f"X_row must contain exactly one row, got {n}")
 
-    explanation = explain_health_claims(model, X_row)
-    features = _prepare_features(model, X_row)
-    contributions_df = explanation.claim_contributions(0)
-    contributions_df["feature_value"] = contributions_df["feature"].map(
-        lambda f: features.iloc[0][f]
-    )
+    feature_names = _require_fitted(model)
+    explainer = _explainer_for(model)
+    claim_key = X_row.iloc[0][CLAIM_KEY_COL] if CLAIM_KEY_COL in X_row.columns else None
 
-    claim_key = explanation.claim_keys[0] if explanation.claim_keys is not None else None
+    try:
+        local = explain_one(explainer, X_row, feature_names, claim_key=claim_key)
+    except ExplainabilityError as exc:
+        raise HealthExplainabilityError(str(exc)) from exc
+
+    predicted_proba = float(model.predict_proba(X_row)[0])
+    contributions = [
+        {
+            "feature": name,
+            "feature_value": local.feature_values[name],
+            "shap_value": local.feature_contributions[name],
+        }
+        for name in local.ranked_features
+    ]
     return {
-        "claim_key": claim_key,
-        "predicted_proba": float(explanation.predicted_proba[0]),
-        "base_value": explanation.base_value,
-        "contributions": [
-            {
-                "feature": row.feature,
-                "feature_value": row.feature_value,
-                "shap_value": float(row.shap_value),
-            }
-            for row in contributions_df.itertuples(index=False)
-        ],
+        "claim_key": local.claim_key,
+        "predicted_proba": predicted_proba,
+        "base_value": local.base_value,
+        "contributions": contributions,
     }
