@@ -162,3 +162,9 @@ DEMOGRAPHICS_COLUMNS = [
     "occupation",
     "insurance_premium_category",
 ]
+
+# ---------------------------------------------------------------------------
+# Generated/derived data (never raw, never committed — see .gitignore)
+# ---------------------------------------------------------------------------
+
+DATA_GENERATED_DIR = PROJECT_ROOT / "data" / "generated"
