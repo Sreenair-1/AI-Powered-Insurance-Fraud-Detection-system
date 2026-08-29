@@ -127,7 +127,8 @@ def _load_dataset(domain: str, params: dict):
 def _render_claim_info(domain: str, dataset, claim_key: str) -> None:
     row = motor_claim_row(dataset, claim_key) if domain == MOTOR_DOMAIN else health_claim_row(dataset, claim_key)
     st.subheader("Claim information")
-    st.dataframe(row.to_frame(name="value"), use_container_width=True)
+    info_df = pd.DataFrame({"Attribute": [str(k) for k in row.index], "Value": [str(v) for v in row.values]})
+    st.dataframe(info_df, 1, hide_index=True)
 
 
 def _render_graph_panel(dataset, claim_key: str) -> None:
@@ -153,13 +154,26 @@ def _render_assessment(assessment) -> None:
     cols[1].markdown(f"### {icon} {summary['risk_category_description']}")
 
     st.markdown("**Top contributing factors (SHAP)**")
-    factors_df = pd.DataFrame(summary["top_factors"])
-    if not factors_df.empty:
-        factors_df = factors_df.rename(
-            columns={"feature": "Feature", "feature_value": "Claim value", "shap_value": "SHAP contribution"}
+    top_factors = summary.get("top_factors", [])
+    if top_factors:
+        display_df = pd.DataFrame(
+            [
+                {
+                    "Feature": str(f.get("feature", "")),
+                    "Claim Value": str(f.get("feature_value", "")),
+                    "SHAP Impact": f"{float(f.get('shap_value', 0.0)):+.3f}",
+                }
+                for f in top_factors
+            ]
+        )
+        chart_df = pd.DataFrame(
+            {
+                "Feature": [str(f.get("feature", "")) for f in top_factors],
+                "SHAP Impact": [float(f.get("shap_value", 0.0)) for f in top_factors],
+            }
         ).set_index("Feature")
-        st.dataframe(factors_df, use_container_width=True)
-        st.bar_chart(factors_df["SHAP contribution"])
+        st.dataframe(display_df, width='stretch', hide_index=True)
+        st.bar_chart(chart_df["SHAP Impact"])
     st.caption(
         "Positive SHAP contributions push the prediction toward higher fraud "
         "risk; negative contributions push it lower. This explains the "
@@ -236,7 +250,7 @@ def _render_forensics_panel(domain: str, model, dataset, claim_key: str) -> None
             st.image(
                 preview_image,
                 caption=f"Preview: {uploaded.name} (Page {page_index + 1})" if is_pdf else f"Preview: {uploaded.name}",
-                use_container_width=True,
+                width='stretch',
             )
         if extracted_text.strip():
             st.markdown("**Extracted Document Text Content:**")
@@ -247,7 +261,7 @@ def _render_forensics_panel(domain: str, model, dataset, claim_key: str) -> None
     col1, col2, col3 = st.columns(3)
     if forensic.ela is not None:
         col1.markdown("**1. Error Level Analysis (ELA)**")
-        col1.image(forensic.ela.ela_image, use_container_width=True)
+        col1.image(forensic.ela.ela_image, width='stretch')
         col1.metric("High-error pixel ratio", f"{forensic.ela.features.high_error_pixel_ratio:.3f}")
         col1.caption("Measures compression variance across pixel regions. High localized variance highlights spliced or pasted content.")
     else:
@@ -256,7 +270,7 @@ def _render_forensics_panel(domain: str, model, dataset, claim_key: str) -> None
     if forensic.copy_move is not None:
         col2.markdown("**2. Copy-Move Forgery Detection**")
         if forensic.copy_move.visualization is not None:
-            col2.image(forensic.copy_move.visualization, use_container_width=True)
+            col2.image(forensic.copy_move.visualization, width='stretch')
         col2.metric(
             "Duplicated Regions",
             "Detected" if forensic.copy_move.potential_duplicate_regions_found else "None Found",
@@ -439,7 +453,7 @@ def _render_new_claim_tab(domain: str, model) -> None:
             st.image(
                 preview_image,
                 caption=f"Preview: {uploaded.name} (Page {page_index + 1})" if is_pdf else f"Preview: {uploaded.name}",
-                use_container_width=True,
+                width='stretch',
             )
         if extracted_text.strip():
             st.markdown("**Text Content Extracted from Document:**")
@@ -450,7 +464,7 @@ def _render_new_claim_tab(domain: str, model) -> None:
     col1, col2, col3 = st.columns(3)
     if forensic.ela is not None:
         col1.markdown("**1. Error Level Analysis (ELA)**")
-        col1.image(forensic.ela.ela_image, use_container_width=True)
+        col1.image(forensic.ela.ela_image, width='stretch')
         col1.metric("High-error pixel ratio", f"{forensic.ela.features.high_error_pixel_ratio:.3f}")
         col1.caption("Measures recompression error across pixel blocks to highlight spliced/pasted elements.")
     else:
@@ -459,7 +473,7 @@ def _render_new_claim_tab(domain: str, model) -> None:
     if forensic.copy_move is not None:
         col2.markdown("**2. Copy-Move Forgery Detection**")
         if forensic.copy_move.visualization is not None:
-            col2.image(forensic.copy_move.visualization, use_container_width=True)
+            col2.image(forensic.copy_move.visualization, width='stretch')
         col2.metric(
             "Duplicated Regions",
             "Detected" if forensic.copy_move.potential_duplicate_regions_found else "None Found",
