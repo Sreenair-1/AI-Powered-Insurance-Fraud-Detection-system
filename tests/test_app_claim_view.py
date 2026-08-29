@@ -201,6 +201,59 @@ def test_rescore_with_forensics_health(health_dataset_and_model, tmp_path: Path)
     assert isinstance(rescored, ClaimRiskAssessment)
 
 
+def _make_pdf(num_pages: int = 1, creator: str = "Test Hospital") -> bytes:
+    import io
+    import pypdf
+    writer = pypdf.PdfWriter()
+    for _ in range(num_pages):
+        writer.add_blank_page(width=200, height=200)
+    writer.add_metadata({"/Creator": creator, "/Producer": "ReportGenerator"})
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
+def test_run_forensic_checks_valid_pdf():
+    pdf_bytes = _make_pdf(num_pages=2, creator="Adobe Photoshop")
+    result = claim_view.run_forensic_checks(pdf_bytes, page_index=1)
+
+    assert result.ela is not None
+    assert result.copy_move is not None
+    assert result.metadata is not None
+    assert result.any_available
+    assert result.metadata.features.software_editing_indicator is True
+
+
+def test_rescore_with_forensics_pdf_motor(motor_dataset_and_model):
+    dataset, model = motor_dataset_and_model
+    claim_key = dataset.X.iloc[0][CLAIM_KEY_COL]
+
+    pdf_bytes = _make_pdf(num_pages=1, creator="Canva")
+    forensic = claim_view.run_forensic_checks(pdf_bytes)
+
+    rescored = claim_view.rescore_with_forensics(
+        claim_view.MOTOR_DOMAIN, model, dataset, claim_key, forensic
+    )
+
+    assert isinstance(rescored, ClaimRiskAssessment)
+    assert rescored.claim_key == claim_key
+    assert 0.0 <= rescored.fraud_probability <= 1.0
+
+
+def test_rescore_with_forensics_pdf_health(health_dataset_and_model):
+    dataset, model = health_dataset_and_model
+    claim_key = dataset.X.iloc[0][CLAIM_KEY_COL]
+
+    pdf_bytes = _make_pdf(num_pages=1)
+    forensic = claim_view.run_forensic_checks(pdf_bytes)
+
+    rescored = claim_view.rescore_with_forensics(
+        claim_view.HEALTH_DOMAIN, model, dataset, claim_key, forensic
+    )
+
+    assert isinstance(rescored, ClaimRiskAssessment)
+
+
 def test_rescore_with_forensics_unknown_claim_key_raises(motor_dataset_and_model, tmp_path: Path):
     dataset, model = motor_dataset_and_model
     path = tmp_path / "doc.jpg"
@@ -211,3 +264,74 @@ def test_rescore_with_forensics_unknown_claim_key_raises(motor_dataset_and_model
         claim_view.rescore_with_forensics(
             claim_view.MOTOR_DOMAIN, model, dataset, "claim:does-not-exist", forensic
         )
+
+
+# ---------------------------------------------------------------------------
+# Standalone New Claim Creation & Assessment
+# ---------------------------------------------------------------------------
+
+
+def test_generate_new_claim_id():
+    cid1 = claim_view.generate_new_claim_id("NEW")
+    cid2 = claim_view.generate_new_claim_id("NEW")
+    assert cid1.startswith("claim:NEW-")
+    assert cid2.startswith("claim:NEW-")
+    assert cid1 != cid2
+
+
+def test_assess_new_claim_document_motor_pdf(motor_dataset_and_model):
+    _, model = motor_dataset_and_model
+    pdf_bytes = _make_pdf(num_pages=1, creator="Canva")
+
+    claim_id, forensic, verdict, assessment = claim_view.assess_new_claim_document(
+        domain=claim_view.MOTOR_DOMAIN,
+        model=model,
+        document=pdf_bytes,
+    )
+
+    assert claim_id.startswith("claim:NEW-")
+    assert forensic.any_available
+    assert verdict.is_tampered  # Canva is an editing software
+    assert verdict.status in ("suspicious", "tampered")
+    assert isinstance(assessment, ClaimRiskAssessment)
+    assert assessment.claim_key == claim_id
+    assert 0.0 <= assessment.fraud_probability <= 1.0
+
+
+def test_assess_new_claim_document_health_image(health_dataset_and_model, tmp_path: Path):
+    _, model = health_dataset_and_model
+    path = tmp_path / "invoice.jpg"
+    _make_image().save(path, format="JPEG")
+
+    claim_id, forensic, verdict, assessment = claim_view.assess_new_claim_document(
+        domain=claim_view.HEALTH_DOMAIN,
+        model=model,
+        document=path,
+    )
+
+    assert claim_id.startswith("claim:NEW-")
+    assert forensic.any_available
+    assert isinstance(verdict, claim_view.DocumentTamperingVerdict)
+    assert isinstance(assessment, ClaimRiskAssessment)
+    assert assessment.claim_key == claim_id
+
+
+def test_assess_new_claim_document_image_stream(motor_dataset_and_model):
+    import io
+    _, model = motor_dataset_and_model
+    buf = io.BytesIO()
+    _make_image().save(buf, format="JPEG")
+    buf.seek(0)
+
+    claim_id, forensic, verdict, assessment = claim_view.assess_new_claim_document(
+        domain=claim_view.MOTOR_DOMAIN,
+        model=model,
+        document=buf,
+    )
+
+    assert claim_id.startswith("claim:NEW-")
+    assert forensic.ela is not None
+    assert forensic.copy_move is not None
+    assert forensic.metadata is not None
+    assert isinstance(verdict, claim_view.DocumentTamperingVerdict)
+    assert isinstance(assessment, ClaimRiskAssessment)

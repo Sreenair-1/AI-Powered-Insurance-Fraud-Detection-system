@@ -30,7 +30,7 @@ from typing import Union
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 
-ImageInput = Union[str, Path, Image.Image]
+ImageInput = Union[str, Path, Image.Image, bytes, bytearray, io.BytesIO]
 
 _SUPPORTED_FORMATS = {"JPEG", "PNG", "TIFF", "BMP"}
 
@@ -72,19 +72,43 @@ def _load_image(image: ImageInput) -> Image.Image:
     """Load and validate an input image without mutating the source file."""
     if isinstance(image, Image.Image):
         img = image.copy()
-    else:
+        img.format = image.format
+        return img
+
+    raw_bytes: Optional[bytes] = None
+
+    if isinstance(image, (bytes, bytearray)):
+        raw_bytes = bytes(image)
+    elif hasattr(image, "read"):
+        try:
+            if hasattr(image, "seek"):
+                image.seek(0)
+            raw_bytes = image.read()
+            if hasattr(image, "seek"):
+                image.seek(0)
+        except Exception as exc:
+            raise ImageLoadError(f"Could not read image stream: {exc}") from exc
+    elif isinstance(image, (str, Path)):
         path = Path(image)
         if not path.exists():
             raise ImageLoadError(f"Image file not found: {path}")
         try:
-            with Image.open(path) as opened:
-                opened.load()
-                img = opened.copy()
-                img.format = opened.format
-        except UnidentifiedImageError as exc:
-            raise ImageLoadError(f"Could not identify image file: {path}") from exc
+            with open(path, "rb") as f:
+                raw_bytes = f.read()
         except OSError as exc:
             raise ImageLoadError(f"Corrupted or unreadable image file: {path}") from exc
+    else:
+        raise ImageLoadError(f"Unsupported image input type: {type(image).__name__}")
+
+    try:
+        with Image.open(io.BytesIO(raw_bytes)) as opened:
+            opened.load()
+            img = opened.copy()
+            img.format = opened.format
+    except UnidentifiedImageError as exc:
+        raise ImageLoadError("Could not identify image file format.") from exc
+    except Exception as exc:
+        raise ImageLoadError(f"Corrupted or unreadable image: {exc}") from exc
 
     fmt = (img.format or "").upper()
     if fmt and fmt not in _SUPPORTED_FORMATS:

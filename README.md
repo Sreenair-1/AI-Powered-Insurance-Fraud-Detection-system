@@ -60,13 +60,13 @@ data/raw/{motor,health,demographics}      src/data/
 | Path | Responsibility | Docs |
 | --- | --- | --- |
 | `src/data/` | Dataset loading, schema validation, preprocessing, leakage-safe train/val/test splits, synthetic entity/fraud-ring augmentation | `docs/data_contract.md`, `docs/synthetic_augmentation.md` |
-| `src/forensics/` | Error Level Analysis, copy-move (ORB keypoint) detection, EXIF metadata analysis on claim document images | `docs/forensics_ela.md`, `docs/forensics_copy_move.md`, `docs/forensics_metadata.md` |
+| `src/forensics/` | Error Level Analysis, copy-move (ORB keypoint) detection, EXIF & PDF metadata analysis on claim document images and PDFs | `docs/forensics_ela.md`, `docs/forensics_copy_move.md`, `docs/forensics_metadata.md`, `docs/forensics_pdf.md` |
 | `src/graph/` | Builds a `networkx` entity graph per claim (policyholder/provider/physician/garage/bank account) and derives centrality, community, and shared-entity "fraud-ring" features | `docs/graph.md` |
 | `src/features/` | Fuses structured + graph + forensic signals into one `claim_key`-indexed feature matrix, `claim_key`-aligned so no source silently drops rows | `docs/feature_fusion.md`, `docs/feature_forensics.md` |
 | `src/models/` | `HealthFraudModel`/`MotorFraudModel` (XGBoost), shared evaluation metrics, JSON-based model persistence (no `pickle`) | `docs/model_health.md`, `docs/model_motor.md`, `docs/model_evaluation.md`, `docs/model_persistence.md`, `docs/model_evaluation_report.md` |
 | `src/explainability/` | SHAP `TreeExplainer`-based global/local explanations, per domain plus a shared model-agnostic layer | `docs/shap.md`, `docs/shap_health.md`, `docs/shap_motor.md` |
 | `src/pipeline/` | Wires fusion + model + evaluation + SHAP into one per-claim risk assessment call | `docs/pipeline.md` |
-| `app/` | Streamlit investigator UI: browse a claim, see forensic/graph/risk/SHAP evidence, upload a document for re-scoring | `docs/app_ui.md` |
+| `app/` | Streamlit investigator UI: browse a claim, see forensic/graph/risk/SHAP evidence, upload a document (image/PDF) for re-scoring | `docs/app_ui.md` |
 | `scripts/train_models.py` | Offline training entry point that produces the model artifacts `app/` loads | `docs/app_ui.md` |
 | `tests/` | Unit + integration tests | `docs/running.md` |
 
@@ -100,7 +100,8 @@ presented as ground truth:
 No claim-level document → image mapping exists in any source dataset, so
 forensic features default to an "unavailable" placeholder for the bulk
 dataset; the Streamlit app's document-upload panel is what actually
-exercises the forensics pipeline against a real image, per claim, live.
+exercises the forensics pipeline against a real image or PDF document, per
+claim, live.
 
 ## Setup
 

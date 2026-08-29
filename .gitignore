@@ -30,3 +30,6 @@ Thumbs.db
 .vscode/
 .idea/
 .claude
+*.md
+!README.md
+*.pdf

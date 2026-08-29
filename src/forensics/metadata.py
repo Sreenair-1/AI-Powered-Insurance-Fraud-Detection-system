@@ -17,13 +17,14 @@ Limitations (read before use):
 """
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Union
+from typing import BinaryIO, Optional, Union
 
 from PIL import ExifTags, Image, UnidentifiedImageError
 
-ImageInput = Union[str, Path, Image.Image]
+ImageInput = Union[str, Path, Image.Image, bytes, bytearray, io.BytesIO, BinaryIO]
 
 _SUPPORTED_FORMATS = {"JPEG", "PNG", "TIFF", "BMP"}
 
@@ -42,6 +43,7 @@ _EDITING_SOFTWARE_MARKERS = (
     "affinity photo",
     "corel",
     "picsart",
+    "canva",
 )
 
 
@@ -81,25 +83,51 @@ def _load_image(image: ImageInput) -> tuple[Image.Image, Optional[int]]:
     """Load and validate an input image without mutating the source file.
 
     Returns the loaded image plus the source file size in bytes (``None`` for
-    an already-in-memory ``PIL.Image`` with no known file on disk).
+    an already-in-memory ``PIL.Image`` with no known file size).
     """
     if isinstance(image, Image.Image):
-        return image.copy(), None
+        img = image.copy()
+        img.format = image.format
+        return img, None
 
-    path = Path(image)
-    if not path.exists():
-        raise ImageLoadError(f"Image file not found: {path}")
+    raw_bytes: Optional[bytes] = None
+    file_size: Optional[int] = None
+
+    if isinstance(image, (bytes, bytearray)):
+        raw_bytes = bytes(image)
+        file_size = len(raw_bytes)
+    elif hasattr(image, "read"):
+        try:
+            if hasattr(image, "seek"):
+                image.seek(0)
+            raw_bytes = image.read()
+            if hasattr(image, "seek"):
+                image.seek(0)
+            file_size = len(raw_bytes)
+        except Exception as exc:
+            raise ImageLoadError(f"Could not read image stream: {exc}") from exc
+    elif isinstance(image, (str, Path)):
+        path = Path(image)
+        if not path.exists():
+            raise ImageLoadError(f"Image file not found: {path}")
+        try:
+            file_size = path.stat().st_size
+            with open(path, "rb") as f:
+                raw_bytes = f.read()
+        except OSError as exc:
+            raise ImageLoadError(f"Could not read image file: {path}") from exc
+    else:
+        raise ImageLoadError(f"Unsupported image input type: {type(image).__name__}")
+
     try:
-        with Image.open(path) as opened:
+        with Image.open(io.BytesIO(raw_bytes)) as opened:
             opened.load()
             img = opened.copy()
-            # PIL.Image.copy() does not carry the source `.format` attribute
-            # over to the copy - restore it explicitly while still open.
             img.format = opened.format
     except UnidentifiedImageError as exc:
-        raise ImageLoadError(f"Could not identify image file: {path}") from exc
-    except OSError as exc:
-        raise ImageLoadError(f"Corrupted or unreadable image file: {path}") from exc
+        raise ImageLoadError("Could not identify image file format.") from exc
+    except Exception as exc:
+        raise ImageLoadError(f"Corrupted or unreadable image: {exc}") from exc
 
     fmt = (img.format or "").upper()
     if fmt and fmt not in _SUPPORTED_FORMATS:
@@ -107,7 +135,7 @@ def _load_image(image: ImageInput) -> tuple[Image.Image, Optional[int]]:
             f"Unsupported image format: {fmt}. Supported formats: "
             f"{sorted(_SUPPORTED_FORMATS)}."
         )
-    return img, path.stat().st_size
+    return img, file_size
 
 
 def _stringify_exif_value(value: object) -> str:

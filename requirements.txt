@@ -8,3 +8,5 @@ opencv-python
 Pillow
 streamlit
 matplotlib
+pypdf
+pypdfium2
