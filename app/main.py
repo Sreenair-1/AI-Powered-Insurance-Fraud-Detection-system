@@ -1,15 +1,15 @@
-"""Streamlit decision-support UI for AI-powered insurance claim fraud detection.
+"""InsureSight AI — Insurance Intelligence & Fraud Investigation Platform.
 
-Thin renderer over `app.model_loader` (persisted models), `app.data_loader`
-(sampled, fused claim data), and `app.claim_view` (assessment + optional
-forensic re-scoring) -- see `docs/app_ui.md` for the full architecture and
-`docs/pipeline.md` for what `src/pipeline/inference.py` actually computes.
-
+Enterprise Streamlit interface for investigators.
+Thin renderer over `app.model_loader`, `app.data_loader`, and `app.claim_view`.
+Scoring and forensic methods are unchanged; this module organizes the decision-support workflow.
+See `docs/app_ui.md`.
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any, Optional
 
 import pandas as pd
 import streamlit as st
@@ -23,10 +23,11 @@ from app.claim_view import (
     ClaimViewError,
     assess_claim,
     assess_new_claim_document,
+    build_investigation_table,
     claim_row,
-    generate_new_claim_id,
     rescore_with_forensics,
     run_forensic_checks,
+    score_loaded_sample,
 )
 from app.data_loader import (
     DatasetNotAvailableError,
@@ -35,68 +36,116 @@ from app.data_loader import (
     health_claim_row,
     motor_claim_row,
 )
-from app.model_loader import ModelNotAvailableError, get_health_model, get_motor_model, load_eval_metrics
-from src.features.structured import CLAIM_KEY_COL
-from src.forensics import (
-    DocumentTamperingVerdict,
-    PDFLoadError,
-    evaluate_document_tampering,
-    extract_pdf_text,
-    get_pdf_info,
-    render_pdf_page,
+from app.model_loader import (
+    ModelNotAvailableError,
+    get_health_model,
+    get_motor_model,
+    load_confusion_matrix,
+    load_eval_metrics,
 )
-from src.pipeline.inference import DEFAULT_RISK_THRESHOLDS
+from app.ui_components import (
+    attribute_risk_chart,
+    claims_to_review_table,
+    feature_importance_chart,
+    grouped_attribute_cards,
+    probability_distribution_chart,
+    render_assessment,
+    render_confusion_matrix_card,
+    render_document_summary,
+    render_forensic_panels,
+    render_graph_signals,
+    render_kpi_row,
+    render_preview,
+    risk_distribution_chart,
+)
+from app.ui_theme import (
+    RISK_COLORS,
+    info_callout,
+    inject_theme,
+    page_header,
+    risk_badge,
+    sidebar_brand,
+    sidebar_footer,
+    sidebar_system_status,
+    status_badge,
+)
+from src.features.structured import CLAIM_KEY_COL
+from src.forensics import PDFLoadError, extract_pdf_text, get_pdf_info, render_pdf_page
+from src.pipeline.inference import DEFAULT_RISK_THRESHOLDS, RISK_CATEGORY_DESCRIPTIONS
 
-st.set_page_config(page_title="Insurance Claim Fraud Risk Review", layout="wide")
+st.set_page_config(
+    page_title="InsureSight AI — Insurance Intelligence",
+    page_icon="IS",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 MOTOR_DOMAIN = "motor"
 HEALTH_DOMAIN = "health"
+PAGES = (
+    "Overview",
+    "Claims Investigation",
+    "Document Forensics",
+    "Model Insights",
+)
 
-_RISK_ICON = {"low": "\U0001F7E2", "medium": "\U0001F7E1", "high": "\U0001F534"}
+MOTOR_GROUPS = {
+    "Policy": ("PolicyType", "BasePolicy", "Deductible", "Days_Policy_Accident", "Days_Policy_Claim"),
+    "Vehicle": ("Make", "VehicleCategory", "VehiclePrice", "AgeOfVehicle", "NumberOfCars"),
+    "Incident": ("AccidentArea", "Fault", "PoliceReportFiled", "WitnessPresent", "Month", "Year"),
+    "Driver": ("Age", "Sex", "MaritalStatus", "DriverRating", "AgeOfPolicyHolder"),
+}
+HEALTH_GROUPS = {
+    "Claim": ("ClaimID", "claim_type", "ClaimStartDt", "ClaimEndDt", "InscClaimAmtReimbursed"),
+    "Provider": ("Provider", "AttendingPhysician", "OperatingPhysician", "OtherPhysician"),
+    "Beneficiary": ("BeneID", "num_diagnosis_codes", "num_procedure_codes"),
+}
 
 
-def _render_header() -> None:
-    st.title("Insurance Claim Fraud Risk Review")
-    st.caption(
-        "Decision-support only. Risk scores and SHAP explanations describe model "
-        "behavior, not proof of fraud -- a \"high\" result means **flagged for "
-        "investigation**, never a determination"
-    )
+def set_navigation_page(page: str) -> None:
+    st.session_state["nav_page"] = page
 
 
-def _sidebar_domain_and_sampling() -> tuple[str, dict]:
-    st.sidebar.header("Dataset")
-    domain = st.sidebar.radio("Claim type", (MOTOR_DOMAIN, HEALTH_DOMAIN), format_func=str.title)
-    st.sidebar.caption(
-        "Claims are loaded from a bounded, seeded sample of the real dataset: "
-        "exact graph centrality (`src/graph/features.py`) does not scale to the "
-        "full dataset within an interactive session. See docs/app_ui.md."
+def _sidebar_controls() -> tuple[str, str, dict]:
+    sidebar_brand()
+    page = st.sidebar.radio("Navigation", PAGES, key="nav_page")
+    st.sidebar.markdown("---")
+    domain = st.sidebar.radio(
+        "Insurance domain",
+        (MOTOR_DOMAIN, HEALTH_DOMAIN),
+        format_func=lambda v: "Health Insurance" if v == HEALTH_DOMAIN else "Motor Insurance",
+        key="domain_select",
     )
     params: dict = {}
     if domain == MOTOR_DOMAIN:
         params["sample_size"] = st.sidebar.slider(
-            "Motor claims to load",
+            "Motor claims sample size",
             100,
             config.MAX_MOTOR_SAMPLE_SIZE,
             config.DEFAULT_MOTOR_SAMPLE_SIZE,
             step=100,
+            help="Configures the number of motor claim records sampled in-memory.",
         )
     else:
         params["inpatient_sample_size"] = st.sidebar.slider(
-            "Inpatient claims to load",
+            "Inpatient claims sample",
             20,
             config.MAX_HEALTH_INPATIENT_SAMPLE_SIZE,
             config.DEFAULT_HEALTH_INPATIENT_SAMPLE_SIZE,
             step=20,
         )
         params["outpatient_sample_size"] = st.sidebar.slider(
-            "Outpatient claims to load",
+            "Outpatient claims sample",
             40,
             config.MAX_HEALTH_OUTPATIENT_SAMPLE_SIZE,
             config.DEFAULT_HEALTH_OUTPATIENT_SAMPLE_SIZE,
             step=40,
         )
-    return domain, params
+    st.sidebar.caption(
+        "Interactive dashboard uses a bounded, deterministic sample of real claims. "
+        "See docs/app_ui.md."
+    )
+    return page, domain, params
 
 
 def _load_model(domain: str):
@@ -105,9 +154,11 @@ def _load_model(domain: str):
     try:
         return getter(str(directory)), directory
     except ModelNotAvailableError as exc:
+        sidebar_system_status(False, 0, directory.name, domain)
+        sidebar_footer()
         st.error(str(exc))
         st.stop()
-        raise  # unreachable, keeps type-checkers happy
+        raise
 
 
 def _load_dataset(domain: str, params: dict):
@@ -116,445 +167,641 @@ def _load_dataset(domain: str, params: dict):
             return get_cached_motor_dataset(**params)
         return get_cached_health_dataset(**params)
     except DatasetNotAvailableError as exc:
+        sidebar_system_status(False, 0, "unavailable", domain)
+        sidebar_footer()
         st.error(
-            f"{exc}\n\nThis app needs the raw datasets under `data/raw/` -- see "
-            "docs/data_contract.md for the expected local file layout."
+            f"{exc}\n\nThis app requires the datasets under `data/raw/` — see "
+            "docs/data_contract.md for the expected file layout."
         )
         st.stop()
-        raise  # unreachable, keeps type-checkers happy
+        raise
 
 
-def _render_claim_info(domain: str, dataset, claim_key: str) -> None:
-    row = motor_claim_row(dataset, claim_key) if domain == MOTOR_DOMAIN else health_claim_row(dataset, claim_key)
-    st.subheader("Claim information")
-    info_df = pd.DataFrame({"Attribute": [str(k) for k in row.index], "Value": [str(v) for v in row.values]})
-    st.dataframe(info_df, 1, hide_index=True)
+def _get_scores(domain: str, model, dataset, sampling_params: dict) -> pd.DataFrame:
+    key = f"scores_{domain}_{sorted(sampling_params.items())}_{len(dataset.X)}"
+    cached = st.session_state.get(key)
+    if isinstance(cached, pd.DataFrame) and len(cached) == len(dataset.X):
+        return cached
+    with st.spinner("Scoring the loaded sample (predict_proba inference)..."):
+        scores = score_loaded_sample(model, dataset.X, DEFAULT_RISK_THRESHOLDS)
+    st.session_state[key] = scores
+    return scores
 
 
-def _render_graph_panel(dataset, claim_key: str) -> None:
-    row = dataset.X[dataset.X[CLAIM_KEY_COL] == claim_key].iloc[0]
-    st.subheader("Graph relationship signals")
-    cols = st.columns(4)
-    cols[0].metric("Shared entities", "Yes" if bool(row.get("has_shared_entity")) else "No")
-    cols[1].metric("Max entity claim degree", int(row.get("max_entity_claim_degree", 0)))
-    cols[2].metric("Community ID", int(row.get("community_id", -1)))
-    cols[3].metric("Degree centrality", f"{float(row.get('degree_centrality', 0.0)):.4f}")
-    st.caption(
-        "A high 'shared entities'/centrality value means this claim's "
-        "provider/garage/bank-account etc. is also linked to other claims -- "
-        "evidence to weigh, not proof of a fraud ring."
-    )
+def _claim_info(domain: str, dataset, claim_key: str) -> pd.Series:
+    if domain == MOTOR_DOMAIN:
+        return motor_claim_row(dataset, claim_key)
+    return health_claim_row(dataset, claim_key)
 
 
-def _render_assessment(assessment) -> None:
-    summary = assessment.to_ui_summary()
-    icon = _RISK_ICON.get(summary["risk_category"], "")
-    cols = st.columns(2)
-    cols[0].metric("Fraud probability", f"{summary['fraud_probability']:.1%}")
-    cols[1].markdown(f"### {icon} {summary['risk_category_description']}")
-
-    st.markdown("**Top contributing factors (SHAP)**")
-    top_factors = summary.get("top_factors", [])
-    if top_factors:
-        display_df = pd.DataFrame(
-            [
-                {
-                    "Feature": str(f.get("feature", "")),
-                    "Claim Value": str(f.get("feature_value", "")),
-                    "SHAP Impact": f"{float(f.get('shap_value', 0.0)):+.3f}",
-                }
-                for f in top_factors
-            ]
-        )
-        chart_df = pd.DataFrame(
-            {
-                "Feature": [str(f.get("feature", "")) for f in top_factors],
-                "SHAP Impact": [float(f.get("shap_value", 0.0)) for f in top_factors],
-            }
-        ).set_index("Feature")
-        st.dataframe(display_df, width='stretch', hide_index=True)
-        st.bar_chart(chart_df["SHAP Impact"])
-    st.caption(
-        "Positive SHAP contributions push the prediction toward higher fraud "
-        "risk; negative contributions push it lower. This explains the "
-        "model's behavior, not a finding of fraud."
-    )
+def _is_pdf(uploaded: Any) -> bool:
+    name = str(getattr(uploaded, "name", "")).lower()
+    return name.endswith(".pdf") or getattr(uploaded, "type", "") == "application/pdf"
 
 
-def _render_forensics_panel(domain: str, model, dataset, claim_key: str) -> None:
-    st.subheader("Document forensics (optional)")
-    uploaded = st.file_uploader(
-        "Upload a claim document (image or PDF) to check for tampering/errors (ELA / copy-move / metadata)",
-        type=["png", "jpg", "jpeg", "tif", "tiff", "bmp", "pdf"],
-    )
-    if uploaded is None:
-        st.caption("No document uploaded for this claim -- forensic features are treated as unavailable.")
-        return
-
-    is_pdf = uploaded.name.lower().endswith(".pdf") or (
-        hasattr(uploaded, "type") and uploaded.type == "application/pdf"
-    )
-
+def _prepare_upload(uploaded: Any, page_key: str) -> tuple[bool, int, Optional[Image.Image], str]:
+    is_pdf = _is_pdf(uploaded)
     page_index = 0
     preview_image = None
     extracted_text = ""
-
-    file_size_kb = len(uploaded.getvalue()) / 1024.0 if hasattr(uploaded, "getvalue") else 0.0
-
     if is_pdf:
-        try:
-            pdf_info = get_pdf_info(uploaded)
-            if pdf_info.page_count > 1:
-                page_selection = st.selectbox(
-                    "Select PDF page to analyze",
-                    options=list(range(1, pdf_info.page_count + 1)),
-                    format_func=lambda p: f"Page {p} of {pdf_info.page_count}",
-                )
-                page_index = page_selection - 1
-            preview_image = render_pdf_page(uploaded, page_index=page_index, scale=1.5)
-            extracted_text = extract_pdf_text(uploaded, page_index=page_index)
-            forensic = run_forensic_checks(uploaded, page_index=page_index)
-        except (PDFLoadError, Exception) as exc:
-            st.warning(f"Could not read or render the uploaded PDF file: {exc}")
-            return
+        pdf_info = get_pdf_info(uploaded)
+        if pdf_info.page_count > 1:
+            page_selection = st.selectbox(
+                "Select PDF page to analyze",
+                options=list(range(1, pdf_info.page_count + 1)),
+                format_func=lambda p, n=pdf_info.page_count: f"Page {p} of {n}",
+                key=page_key,
+            )
+            page_index = page_selection - 1
+        preview_image = render_pdf_page(uploaded, page_index=page_index, scale=1.5)
+        extracted_text = extract_pdf_text(uploaded, page_index=page_index)
     else:
-        try:
-            preview_image = Image.open(uploaded)
-            forensic = run_forensic_checks(preview_image)
-        except Exception:
-            st.warning("Could not read the uploaded file as an image.")
-            return
+        preview_image = Image.open(uploaded)
+    return is_pdf, page_index, preview_image, extracted_text
 
-    if not forensic.any_available:
-        st.warning("Could not analyze the uploaded file; forensic features remain unavailable.")
+
+# ---------------------------------------------------------------------------
+# Destination 1: Overview Dashboard
+# ---------------------------------------------------------------------------
+
+def _inspect_selected_claim(chosen) -> None:
+    st.session_state["selected_claim_key"] = chosen
+    st.session_state["nav_page"] = "Claims Investigation"
+
+
+def _render_overview(domain: str, model, table: pd.DataFrame) -> None:
+    page_header(
+        "Overview",
+        "Investigation overview",
+        "KPI metrics and charts below represent model risk inference across the "
+        "currently loaded sample, clearly separated from training-time evaluation benchmarks.",
+    )
+    if table.empty:
+        st.warning("No claims loaded for this sample size. Adjust the sidebar sample controls.")
         return
 
-    # Document Overview Metrics
-    st.markdown("#### 📄 Uploaded Document Summary")
-    meta_dict = forensic.metadata.structured_metadata if forensic.metadata else {}
-    doc_cols = st.columns(4)
-    doc_cols[0].metric("File Name", uploaded.name)
-    doc_cols[1].metric("File Size", f"{file_size_kb:.1f} KB")
-    doc_cols[2].metric(
-        "Format",
-        f"PDF ({meta_dict.get('page_count', 1)} pages)" if is_pdf else str(meta_dict.get("format", "Image")),
-    )
-    doc_cols[3].metric(
-        "Software Detected",
-        "Yes (Editing Tool)" if forensic.metadata and forensic.metadata.features.software_editing_indicator else ("Present" if meta_dict.get("software") else "None"),
+    n = len(table)
+    high = int((table["risk_category"] == "high").sum())
+    medium = int((table["risk_category"] == "medium").sum())
+    low = int((table["risk_category"] == "low").sum())
+    review = high + medium
+
+    render_kpi_row(
+        [
+            ("Loaded Sample", f"{n:,}", "Claims currently in memory", None),
+            ("High Risk", f"{high:,}", "Probability ≥ 70%", RISK_COLORS["high"]),
+            ("Medium Risk", f"{medium:,}", "Probability 30%–69%", RISK_COLORS["medium"]),
+            ("Low Risk", f"{low:,}", "Probability < 30%", RISK_COLORS["low"]),
+            ("Requires Review", f"{review:,}", "High + Medium risk claims", RISK_COLORS["medium"]),
+        ]
     )
 
-    # Document Preview & Extracted Content Expander
-    with st.expander("Document Visual Preview & Extracted Text", expanded=False):
-        if preview_image is not None:
-            st.image(
-                preview_image,
-                caption=f"Preview: {uploaded.name} (Page {page_index + 1})" if is_pdf else f"Preview: {uploaded.name}",
-                width='stretch',
+    st.caption(
+        "Risk cutoffs use decision-support thresholds: Low < 30%, Medium 30%–69%, High ≥ 70%. "
+        "They represent triage prioritization bands, not confirmed fraud rates."
+    )
+
+    st.markdown("##### Portfolio Risk Analytics")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Risk-Category Distribution**")
+        risk_distribution_chart(table)
+    with c2:
+        st.markdown("**Claim Volume & Risk Breakdown**")
+        attribute_risk_chart(table, domain)
+
+    c3, c4 = st.columns(2)
+    with c3:
+        st.markdown("**Fraud Probability Score Distribution**")
+        probability_distribution_chart(table)
+        st.caption("Dotted lines indicate Medium (30%) and High (70%) decision thresholds.")
+    with c4:
+        st.markdown("**Top Model Risk Drivers (Global Feature Importance)**")
+        feature_importance_chart(model, top_n=8)
+        st.caption("Key predictive features learned by the XGBoost fraud detection model.")
+
+    st.markdown("---")
+    st.markdown("##### Priority Claims Requiring Investigation")
+    st.caption("Sorted with high-risk priority first, followed by medium-risk, in stable order.")
+    review_df = claims_to_review_table(table, limit=15)
+
+    show_cols = [
+        c
+        for c in [
+            CLAIM_KEY_COL,
+            "domain",
+            "risk_category",
+            "fraud_probability",
+            "Make",
+            "AccidentArea",
+            "claim_type",
+            "Provider",
+            "has_shared_entity",
+        ]
+        if c in review_df.columns
+    ]
+
+    display_df = review_df[show_cols].copy()
+    if "fraud_probability" in display_df.columns:
+        display_df["fraud_probability"] = display_df["fraud_probability"].map(lambda p: f"{float(p):.1%}")
+
+    st.dataframe(display_df, hide_index=True, width="stretch")
+
+    
+    options = list(review_df[CLAIM_KEY_COL])
+
+    if options:
+        col_sel, col_btn = st.columns([3, 1])
+
+        with col_sel:
+            chosen = st.selectbox(
+                "Select a priority claim to inspect in detail",
+                ["—"] + options,
+                key="overview_selected_claim",
             )
-        if extracted_text.strip():
-            st.markdown("**Extracted Document Text Content:**")
-            st.text_area("Text extracted from document", extracted_text, height=150, disabled=True)
 
-    # Three-Column Forensic Analysis
-    st.markdown("#### 🔬 Document Tampering & Forensics Inspection")
-    col1, col2, col3 = st.columns(3)
-    if forensic.ela is not None:
-        col1.markdown("**1. Error Level Analysis (ELA)**")
-        col1.image(forensic.ela.ela_image, width='stretch')
-        col1.metric("High-error pixel ratio", f"{forensic.ela.features.high_error_pixel_ratio:.3f}")
-        col1.caption("Measures compression variance across pixel regions. High localized variance highlights spliced or pasted content.")
-    else:
-        col1.info("ELA unavailable for this file.")
+        with col_btn:
+            st.write("")
+            st.write("")
 
-    if forensic.copy_move is not None:
-        col2.markdown("**2. Copy-Move Forgery Detection**")
-        if forensic.copy_move.visualization is not None:
-            col2.image(forensic.copy_move.visualization, width='stretch')
-        col2.metric(
-            "Duplicated Regions",
-            "Detected" if forensic.copy_move.potential_duplicate_regions_found else "None Found",
+            st.button(
+                "Inspect selected claim",
+                type="primary",
+                disabled=(chosen == "—"),
+                on_click=_inspect_selected_claim,
+                args=(chosen,),
+            )
+
+
+
+# ---------------------------------------------------------------------------
+# Destination 2: Claims Investigation Workspace
+# ---------------------------------------------------------------------------
+
+
+def _filter_table(table: pd.DataFrame, domain: str) -> pd.DataFrame:
+    c_search, c_risk, c_domain, c_prob = st.columns([2, 1.5, 1.5, 1.5])
+    with c_search:
+        search = st.text_input("Search claim identifier", placeholder="e.g. claim:12 or claim:CLM4…")
+    with c_risk:
+        risk_opts = st.multiselect(
+            "Risk tier",
+            ["high", "medium", "low"],
+            default=["high", "medium", "low"],
+            format_func=lambda r: f"{r.title()} Risk",
         )
-        col2.caption("Uses ORB keypoint matching to detect duplicated signatures, hospital stamps, or cloned amounts.")
-    else:
-        col2.info("Copy-move detection unavailable for this file.")
+    with c_prob:
+        min_p = st.slider("Min probability", 0.0, 1.0, 0.0, step=0.05)
 
-    if forensic.metadata is not None:
-        col3.markdown("**3. Metadata & Revision Analysis**")
-        if is_pdf:
-            if meta_dict.get("author"):
-                col3.write(f"• **Author:** {meta_dict.get('author')}")
-            if meta_dict.get("software"):
-                col3.write(f"• **Software Tag:** `{meta_dict.get('software')}`")
-            if meta_dict.get("datetime_original"):
-                col3.write(f"• **Created:** {meta_dict.get('datetime_original')}")
-            if meta_dict.get("datetime_modified"):
-                col3.write(f"• **Modified:** {meta_dict.get('datetime_modified')}")
+    filtered = table[table["risk_category"].isin(risk_opts)] if risk_opts else table.iloc[0:0]
+    if min_p > 0.0:
+        filtered = filtered[filtered["fraud_probability"] >= min_p]
+
+    with c_domain:
+        if domain == HEALTH_DOMAIN and "claim_type" in filtered.columns:
+            types = sorted(filtered["claim_type"].dropna().astype(str).unique().tolist())
+            chosen_types = st.multiselect("Claim type", types, default=types)
+            if chosen_types:
+                filtered = filtered[filtered["claim_type"].astype(str).isin(chosen_types)]
+        elif domain == MOTOR_DOMAIN and "AccidentArea" in filtered.columns:
+            areas = sorted(filtered["AccidentArea"].dropna().astype(str).unique().tolist())
+            chosen_areas = st.multiselect("Accident area", areas, default=areas)
+            if chosen_areas:
+                filtered = filtered[filtered["AccidentArea"].astype(str).isin(chosen_areas)]
         else:
-            col3.write(f"• **Dimensions:** {meta_dict.get('width', 0)} × {meta_dict.get('height', 0)} px")
-            if meta_dict.get("camera_make") or meta_dict.get("camera_model"):
-                cam = " ".join(filter(None, [meta_dict.get("camera_make"), meta_dict.get("camera_model")]))
-                col3.write(f"• **Camera:** {cam}")
-            if meta_dict.get("software"):
-                col3.write(f"• **Software Tag:** `{meta_dict.get('software')}`")
-            if meta_dict.get("datetime_original"):
-                col3.write(f"• **Created:** {meta_dict.get('datetime_original')}")
-            if meta_dict.get("datetime_modified"):
-                col3.write(f"• **Modified:** {meta_dict.get('datetime_modified')}")
+            st.caption("No sub-category filter available.")
 
-        st_indicators = forensic.metadata.analysis.get("indicators", [])
-        if st_indicators:
-            col3.markdown("**Forensic Indicators:**")
-            for indicator in st_indicators:
-                col3.write(f"- {indicator}")
-        col3.caption(forensic.metadata.analysis.get("note", ""))
-    else:
-        col3.info("Metadata analysis unavailable for this file.")
+    if search.strip():
+        needle = search.strip().lower()
+        filtered = filtered[filtered[CLAIM_KEY_COL].astype(str).str.lower().str.contains(needle, regex=False)]
 
-    # Re-scoring integration
+    return filtered
+
+
+def _render_claim_detail(domain: str, model, dataset, claim_key: str) -> None:
+    c_back, c_space = st.columns([1, 4])
+    with c_back:
+        if st.button("← Back to claims list"):
+            st.session_state["selected_claim_key"] = None
+            st.rerun()
+
+    st.markdown(f"#### Case Investigation: `{claim_key}`")
+    try:
+        info = _claim_info(domain, dataset, claim_key)
+        fused = dataset.X[dataset.X[CLAIM_KEY_COL] == claim_key].iloc[0]
+        row = claim_row(dataset, claim_key)
+        assessment = assess_claim(domain, model, row, DEFAULT_RISK_THRESHOLDS)
+    except (ClaimViewError, DatasetNotAvailableError) as exc:
+        st.error(str(exc))
+        return
+
+    # Section A: Claim Summary & Section B: Risk Assessment
+    render_assessment(assessment, heading="Claim Risk Assessment & Scoring")
+
+    # Section D: Structured Claim Attributes
+    st.markdown("##### Structured Claim Attributes")
+    grouped_attribute_cards(info, MOTOR_GROUPS if domain == MOTOR_DOMAIN else HEALTH_GROUPS)
+
+    # Section E: Graph Relationship Signals
+    render_graph_signals(fused)
+
+    # Session-Only Investigation Notes
+    st.markdown("##### Investigation Notes & Triage Status")
+    info_callout(
+        "Notes and review statuses entered here are session-only and will not overwrite "
+        "or mutate the underlying historical database.",
+        title="Session Working State",
+        variant="amber",
+    )
+    col_stat, col_notes = st.columns([1, 2])
+    with col_stat:
+        st.selectbox(
+            "Review status (session-only)",
+            ("Unreviewed", "Under Active Investigation", "Special Investigation Unit (SIU) Referral", "Cleared / No Fraud Indicated"),
+            key=f"review_status_{claim_key}",
+        )
+    with col_notes:
+        st.text_area(
+            "Investigator notes (session-only)",
+            key=f"review_note_{claim_key}",
+            placeholder="Record rationale, forensic flags, or next investigation steps...",
+            height=90,
+        )
+
+    # Attached Document Forensics & Reassessment
+    st.markdown("---")
+    st.markdown("##### Attached Document Forensics for this Claim")
+    st.caption("Upload a supporting claim document (invoice, repair estimate, police report, medical bill).")
+    _render_attached_forensics(domain, model, dataset, claim_key, assessment)
+
+
+def _render_attached_forensics(domain: str, model, dataset, claim_key: str, original) -> None:
+    uploaded = st.file_uploader(
+        "Upload a claim document (PNG, JPEG, TIFF, BMP, or PDF)",
+        type=["png", "jpg", "jpeg", "tif", "tiff", "bmp", "pdf"],
+        key=f"forensics_upload_{claim_key}",
+    )
+    if uploaded is None:
+        st.info("No document uploaded — baseline forensic features remain unavailable for this claim.")
+        return
+    try:
+        is_pdf, page_index, preview, text = _prepare_upload(uploaded, f"pdf_page_{claim_key}")
+        forensic = run_forensic_checks(uploaded, page_index=page_index)
+    except (PDFLoadError, OSError, Exception) as exc:
+        st.error(f"Could not read the uploaded document: {exc}")
+        return
+    if not forensic.any_available:
+        st.warning("Could not execute forensic checks on this file; features remain unavailable.")
+        return
+
+    render_document_summary(uploaded, forensic, is_pdf)
+    render_preview(preview, text, getattr(uploaded, "name", "document"))
+    render_forensic_panels(forensic, is_pdf)
+
     try:
         rescored = rescore_with_forensics(domain, model, dataset, claim_key, forensic)
     except ClaimViewError as exc:
         st.error(str(exc))
         return
 
-    st.markdown("---")
-    st.subheader("🎯 Claim Risk Assessment Updated with Document Evidence")
-    st.caption("How this uploaded document's forensic evidence fused with the structured claim and graph signals:")
-    _render_assessment(rescored)
+    st.markdown("##### Integrated Risk Reassessment (Multimodal Fusion)")
+    p_orig = original.fraud_probability
+    p_new = rescored.fraud_probability
+    delta = p_new - p_orig
 
-
-def _render_eval_metrics(model_dir) -> None:
-    with st.expander("Model evaluation (held-out validation split, from training time)"):
-        metrics = load_eval_metrics(model_dir)
-        if metrics is None:
-            st.info(
-                "No evaluation metrics recorded for this artifact. Re-run "
-                "`scripts/train_models.py` to generate one."
-            )
-            return
-        cols = st.columns(5)
-        cols[0].metric("Accuracy", f"{metrics['accuracy']:.3f}")
-        cols[1].metric("Precision", f"{metrics['precision']:.3f}")
-        cols[2].metric("Recall", f"{metrics['recall']:.3f}")
-        cols[3].metric("F1", f"{metrics['f1']:.3f}")
-        cols[4].metric("ROC-AUC", f"{metrics['roc_auc']:.3f}")
-        st.caption(f"{metrics['n_samples']} validation claims ({metrics['n_positive']} positive).")
-
-
-def _render_new_claim_tab(domain: str, model) -> None:
-    st.subheader("📄 Upload & Analyze New Claim Document")
+    delta_label = f"{delta:+.1%}" if abs(delta) >= 0.001 else "No change"
     st.caption(
-        "Upload a new claim document (invoice, medical bill, discharge summary, repair estimate, police report). "
-        "The system will check the document for digital tampering, assign a unique Claim ID, and compute the fraud risk score."
+        f"Original model score: {p_orig:.1%}. Updated multimodal score: {p_new:.1%} (Impact: {delta_label}). "
+        "The updated assessment reflects fused tabular, graph, and forensic document evidence. "
+        "It serves as a decision-support adjustment, not a certified fraud finding."
     )
 
-    uploaded = st.file_uploader(
-        "Upload a claim document to inspect (PDF, JPEG, PNG, TIFF, BMP)",
-        type=["pdf", "png", "jpg", "jpeg", "tif", "tiff", "bmp"],
-        key="new_claim_uploader",
-    )
+    before, after = st.columns(2)
+    with before:
+        render_assessment(original, heading="Original Model Assessment (Tabular + Graph)")
+    with after:
+        render_assessment(rescored, heading="Updated Assessment (With Forensic Evidence)")
 
-    if uploaded is None:
-        st.info("👆 Upload a document above to generate a new claim and check for tampering.")
+
+def _render_claims(domain: str, model, dataset, table: pd.DataFrame) -> None:
+    selected = st.session_state.get("selected_claim_key")
+    if selected:
+        _render_claim_detail(domain, model, dataset, selected)
         return
 
-    is_pdf = uploaded.name.lower().endswith(".pdf") or (
-        hasattr(uploaded, "type") and uploaded.type == "application/pdf"
+    page_header(
+        "Claims investigation",
+        "Claims workspace",
+        "Filter and browse the loaded claims sample, then select an individual claim for deep-dive investigation. "
+        "SHAP explanations are computed on-demand for the inspected claim.",
     )
-
-    page_index = 0
-    preview_image = None
-    extracted_text = ""
-    file_size_kb = len(uploaded.getvalue()) / 1024.0 if hasattr(uploaded, "getvalue") else 0.0
-
-    if is_pdf:
-        try:
-            pdf_info = get_pdf_info(uploaded)
-            if pdf_info.page_count > 1:
-                page_selection = st.selectbox(
-                    "Select PDF page to analyze",
-                    options=list(range(1, pdf_info.page_count + 1)),
-                    format_func=lambda p: f"Page {p} of {pdf_info.page_count}",
-                    key="new_claim_pdf_page",
-                )
-                page_index = page_selection - 1
-            preview_image = render_pdf_page(uploaded, page_index=page_index, scale=1.5)
-            extracted_text = extract_pdf_text(uploaded, page_index=page_index)
-        except (PDFLoadError, Exception) as exc:
-            st.warning(f"Could not read or render the uploaded PDF file: {exc}")
-            return
-    else:
-        try:
-            preview_image = Image.open(uploaded)
-        except Exception:
-            st.warning("Could not read the uploaded file as an image.")
-            return
-
-    # Run standalone assessment
-    try:
-        new_claim_id, forensic, verdict, assessment = assess_new_claim_document(
-            domain=domain,
-            model=model,
-            document=uploaded,
-            page_index=page_index,
-        )
-    except Exception as exc:
-        st.error(f"Error during claim assessment: {exc}")
+    if table.empty:
+        st.warning("No claims loaded for this sample size. Adjust the sidebar sample controls.")
         return
 
-    # Generated Claim ID Card
-    st.success(f"🎫 Generated New Claim ID: **`{new_claim_id}`** (Domain: **{domain.title()} Insurance**)")
+    filtered = _filter_table(table, domain)
 
-    # Tampering Verdict Card
-    st.markdown("### 🛡️ Document Tampering & Integrity Verdict")
-    if verdict.status == "tampered":
-        st.error(
-            f"🚨 **DOCUMENT TAMPERING STATUS: HIGH RISK / TAMPERED** "
-            f"(Tampering Anomaly Score: {verdict.tampering_score:.0%})"
+    c_sort, c_order, c_size = st.columns([2, 1, 1])
+    with c_sort:
+        sort_col = st.selectbox(
+            "Sort claims by",
+            [c for c in ["fraud_probability", CLAIM_KEY_COL, "risk_category"] if c in filtered.columns],
+            format_func=lambda c: "Fraud Probability" if c == "fraud_probability" else ("Claim ID" if c == CLAIM_KEY_COL else "Risk Category"),
         )
-    elif verdict.status == "suspicious":
-        st.warning(
-            f"⚠️ **DOCUMENT TAMPERING STATUS: SUSPICIOUS / ELEVATED ANOMALIES** "
-            f"(Tampering Anomaly Score: {verdict.tampering_score:.0%})"
-        )
-    else:
-        st.success(
-            f"✅ **DOCUMENT TAMPERING STATUS: AUTHENTIC / LOW RISK** "
-            f"(Tampering Anomaly Score: {verdict.tampering_score:.0%})"
-        )
+    with c_order:
+        descending = st.checkbox("Descending", value=True)
+    with c_size:
+        page_size = st.selectbox("Rows per page", [10, 25, 50], index=1)
 
-    st.write(verdict.summary)
+    filtered = filtered.sort_values(sort_col, ascending=not descending)
+    n = len(filtered)
+    pages = max(1, (n + page_size - 1) // page_size)
 
-    if verdict.tampering_indicators:
-        st.markdown("**Tampering Red Flags Detected:**")
-        for flag in verdict.tampering_indicators:
-            st.markdown(f"- 🔴 **{flag}**")
-    else:
-        st.markdown("- 🟢 No digital alteration markers, software signatures, or duplicated regions detected.")
+    c_page_num, c_page_info = st.columns([1, 3])
+    with c_page_num:
+        page_i = st.number_input("Page", min_value=1, max_value=pages, value=1)
+    with c_page_info:
+        st.write("")
+        st.caption(f"Showing page {page_i} of {pages} ({n:,} matching claims)")
 
-    # Document Overview Metrics
-    st.markdown("#### 📄 Document Information & Extracted Content")
-    meta_dict = forensic.metadata.structured_metadata if forensic.metadata else {}
-    doc_cols = st.columns(4)
-    doc_cols[0].metric("File Name", uploaded.name)
-    doc_cols[1].metric("File Size", f"{file_size_kb:.1f} KB")
-    doc_cols[2].metric(
-        "Format",
-        f"PDF ({meta_dict.get('page_count', 1)} pages)" if is_pdf else str(meta_dict.get("format", "Image")),
+    start = (page_i - 1) * page_size
+    page_df = filtered.iloc[start : start + page_size].copy()
+
+    show_cols = [
+        c
+        for c in [
+            CLAIM_KEY_COL,
+            "domain",
+            "risk_category",
+            "fraud_probability",
+            "Make",
+            "AccidentArea",
+            "Age",
+            "PolicyType",
+            "claim_type",
+            "Provider",
+            "BeneID",
+            "InscClaimAmtReimbursed",
+            "has_shared_entity",
+        ]
+        if c in page_df.columns
+    ]
+
+    display_page_df = page_df[show_cols].copy()
+    if "fraud_probability" in display_page_df.columns:
+        display_page_df["fraud_probability"] = display_page_df["fraud_probability"].map(lambda p: f"{float(p):.1%}")
+
+    st.dataframe(display_page_df, hide_index=True, width="stretch")
+
+    keys = list(page_df[CLAIM_KEY_COL])
+    if not keys:
+        st.info("No claims match the active search and filter criteria. Clear filters to proceed.")
+        return
+
+    col_pick, col_act = st.columns([3, 1])
+    with col_pick:
+        pick = st.selectbox("Selected claim", keys)
+    with col_act:
+        st.write("")
+        st.write("")
+        if st.button("Inspect claim", type="primary"):
+            st.session_state["selected_claim_key"] = pick
+            st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Destination 3: Document Forensics Workspace
+# ---------------------------------------------------------------------------
+
+
+def _new_claim_overrides(domain: str) -> dict[str, Any]:
+    st.markdown("**Claim Baseline Attributes**")
+    st.caption(
+        "Uploaded documents do not contain a structured claim schema. Specify the "
+        "structured parameters required by the feature fusion pipeline."
     )
-    doc_cols[3].metric(
-        "Editing Software",
-        "Detected" if forensic.metadata and forensic.metadata.features.software_editing_indicator else ("Present" if meta_dict.get("software") else "None"),
+    values: dict[str, Any] = {}
+    if domain == MOTOR_DOMAIN:
+        c1, c2, c3 = st.columns(3)
+        values["Make"] = c1.text_input("Vehicle Make", "Honda")
+        values["AccidentArea"] = c2.selectbox("Accident Area", ["Urban", "Rural"])
+        values["Age"] = c3.number_input("Driver Age", min_value=16, max_value=100, value=35)
+        c1, c2, c3 = st.columns(3)
+        values["PolicyType"] = c1.text_input("Policy Type", "Sedan - All Perils")
+        values["VehicleCategory"] = c2.text_input("Vehicle Category", "Sedan")
+        values["PoliceReportFiled"] = c3.selectbox("Police Report Filed", ["No", "Yes"])
+    else:
+        c1, c2, c3 = st.columns(3)
+        values["claim_type"] = c1.selectbox("Claim Type", ["inpatient", "outpatient"])
+        values["num_diagnosis_codes"] = c2.number_input("Diagnosis Codes", min_value=0, value=2)
+        values["num_procedure_codes"] = c3.number_input("Procedure Codes", min_value=0, value=1)
+        c1, c2 = st.columns(2)
+        values["chronic_condition_count"] = c1.number_input("Chronic Condition Count", min_value=0, value=1)
+        values["has_renal_disease"] = c2.checkbox("Renal Disease Indicator")
+    return values
+
+
+def _render_forensics_page(domain: str, model, dataset) -> None:
+    page_header(
+        "Document forensics",
+        "Document workspace",
+        "Analyze claim documents using multi-spectral Error Level Analysis (ELA), "
+        "ORB Copy-Move forgery detection, and EXIF/PDF catalog metadata parsing.",
     )
+    tab_existing, tab_new = st.tabs(["Attach to Loaded Claim", "New-Claim Document Assessment"])
 
-    with st.expander("👁️ Document Visual Preview & Extracted Text", expanded=False):
-        if preview_image is not None:
-            st.image(
-                preview_image,
-                caption=f"Preview: {uploaded.name} (Page {page_index + 1})" if is_pdf else f"Preview: {uploaded.name}",
-                width='stretch',
-            )
-        if extracted_text.strip():
-            st.markdown("**Text Content Extracted from Document:**")
-            st.text_area("Document Content", extracted_text, height=150, disabled=True, key="new_claim_text_area")
-
-    # Forensic Details
-    st.markdown("#### 🔬 Detailed Forensics Inspection")
-    col1, col2, col3 = st.columns(3)
-    if forensic.ela is not None:
-        col1.markdown("**1. Error Level Analysis (ELA)**")
-        col1.image(forensic.ela.ela_image, width='stretch')
-        col1.metric("High-error pixel ratio", f"{forensic.ela.features.high_error_pixel_ratio:.3f}")
-        col1.caption("Measures recompression error across pixel blocks to highlight spliced/pasted elements.")
-    else:
-        col1.info("ELA unavailable for this file.")
-
-    if forensic.copy_move is not None:
-        col2.markdown("**2. Copy-Move Forgery Detection**")
-        if forensic.copy_move.visualization is not None:
-            col2.image(forensic.copy_move.visualization, width='stretch')
-        col2.metric(
-            "Duplicated Regions",
-            "Detected" if forensic.copy_move.potential_duplicate_regions_found else "None Found",
-        )
-        col2.caption("Uses ORB keypoint matching to detect duplicated signatures, hospital stamps, or cloned amounts.")
-    else:
-        col2.info("Copy-move detection unavailable for this file.")
-
-    if forensic.metadata is not None:
-        col3.markdown("**3. Metadata & Revision Analysis**")
-        if is_pdf:
-            if meta_dict.get("author"):
-                col3.write(f"• **Author:** {meta_dict.get('author')}")
-            if meta_dict.get("software"):
-                col3.write(f"• **Software Tag:** `{meta_dict.get('software')}`")
-            if meta_dict.get("datetime_original"):
-                col3.write(f"• **Created:** {meta_dict.get('datetime_original')}")
-            if meta_dict.get("datetime_modified"):
-                col3.write(f"• **Modified:** {meta_dict.get('datetime_modified')}")
+    with tab_existing:
+        keys = list(dataset.X[CLAIM_KEY_COL])
+        if not keys:
+            st.warning("No claims loaded in memory for this sample.")
         else:
-            col3.write(f"• **Dimensions:** {meta_dict.get('width', 0)} × {meta_dict.get('height', 0)} px")
-            if meta_dict.get("camera_make") or meta_dict.get("camera_model"):
-                cam = " ".join(filter(None, [meta_dict.get("camera_make"), meta_dict.get("camera_model")]))
-                col3.write(f"• **Camera:** {cam}")
-            if meta_dict.get("software"):
-                col3.write(f"• **Software Tag:** `{meta_dict.get('software')}`")
-            if meta_dict.get("datetime_original"):
-                col3.write(f"• **Created:** {meta_dict.get('datetime_original')}")
-            if meta_dict.get("datetime_modified"):
-                col3.write(f"• **Modified:** {meta_dict.get('datetime_modified')}")
+            claim_key = st.selectbox("Select claim to attach document to", keys, key="forensic_claim_pick")
+            row = claim_row(dataset, claim_key)
+            original = assess_claim(domain, model, row, DEFAULT_RISK_THRESHOLDS)
+            _render_attached_forensics(domain, model, dataset, claim_key, original)
 
-        st_indicators = forensic.metadata.analysis.get("indicators", [])
-        if st_indicators:
-            col3.markdown("**Metadata Indicators:**")
-            for indicator in st_indicators:
-                col3.write(f"- {indicator}")
-    else:
-        col3.info("Metadata analysis unavailable for this file.")
+    with tab_new:
+        st.markdown("##### Standalone Document Assessment (No Pre-selected Claim)")
+        uploaded = st.file_uploader(
+            "Upload a claim document for standalone forensic triage (PDF, PNG, JPG, TIFF, BMP)",
+            type=["pdf", "png", "jpg", "jpeg", "tif", "tiff", "bmp"],
+            key="new_claim_uploader",
+        )
+        if uploaded is None:
+            st.info("Upload an invoice, hospital bill, repair receipt, or claim form to start a standalone triage.")
+            return
 
-    # Fraud Risk Prediction
-    st.markdown("---")
-    st.subheader(f"🎯 Fraud Risk Assessment for New Claim `{new_claim_id}`")
-    st.caption("Combines the uploaded document's forensic findings with domain risk models and SHAP explainability:")
-    _render_assessment(assessment)
+        try:
+            is_pdf, page_index, preview, text = _prepare_upload(uploaded, "new_claim_pdf_page")
+        except (PDFLoadError, OSError, Exception) as exc:
+            st.error(f"Could not read the uploaded document: {exc}")
+            return
+
+        render_preview(preview, text, getattr(uploaded, "name", "document"))
+
+        with st.form("new_claim_form"):
+            overrides = _new_claim_overrides(domain)
+            submitted = st.form_submit_button("Run Document Assessment", type="primary")
+
+        if not submitted and "new_claim_result" not in st.session_state:
+            st.caption("Submit the form above to execute forensics and multimodal fraud risk scoring.")
+            return
+
+        if submitted:
+            try:
+                result = assess_new_claim_document(
+                    domain=domain,
+                    model=model,
+                    document=uploaded,
+                    page_index=page_index,
+                    overrides=overrides,
+                )
+                st.session_state["new_claim_result"] = result
+            except Exception as exc:
+                st.error(f"Assessment failed: {exc}")
+                return
+
+        result = st.session_state.get("new_claim_result")
+        if not result:
+            return
+
+        new_claim_id, forensic, verdict, assessment = result
+        st.success(f"Generated Session Claim Identifier: `{new_claim_id}`")
+
+        # Document Tampering Verdict Summary Card
+        v_status = verdict.status
+        v_variant = "danger" if v_status == "tampered" else ("warning" if v_status == "suspicious" else "success")
+        st.markdown(
+            f'<div class="is-card">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">'
+            f'<div style="font-weight:700;font-size:1.05rem;">Document Tampering Verdict</div>'
+            f'<div>{status_badge(v_status.title(), v_variant)}</div>'
+            f'</div>'
+            f'<div style="font-size:0.88rem;color:#334155;margin-bottom:0.4rem;">{html.escape(verdict.summary)}</div>'
+            f'<div style="font-size:0.8rem;color:#64748B;">Tampering Anomaly Score: <b>{verdict.tampering_score:.0%}</b></div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        if verdict.tampering_indicators:
+            st.markdown("**Tampering Flags Identified**")
+            for flag in verdict.tampering_indicators:
+                st.markdown(f"- {flag}")
+
+        render_document_summary(uploaded, forensic, is_pdf)
+        render_forensic_panels(forensic, is_pdf)
+        render_assessment(assessment, heading="Combined Multimodal Risk Assessment (Document + Attributes)")
 
 
-def _render_historical_claims_tab(domain: str, model, dataset, model_dir) -> None:
-    claim_keys = list(dataset.X[CLAIM_KEY_COL])
-    if not claim_keys:
-        st.warning("No claims loaded for this sample size -- try increasing it in the sidebar.")
-        return
+# ---------------------------------------------------------------------------
+# Destination 4: Model Insights & Transparency
+# ---------------------------------------------------------------------------
 
-    claim_key = st.selectbox("Select a claim to review", claim_keys)
-    assert claim_key is not None
 
-    _render_claim_info(domain, dataset, claim_key)
-    _render_graph_panel(dataset, claim_key)
+def _render_insights(domain: str, active_model_dir: Path) -> None:
+    page_header(
+        "Model insights",
+        "Transparency and evaluation",
+        "Evaluation benchmarks below reflect performance metrics on the held-out validation "
+        "splits computed at training time. They are strictly separate from interactive sample scores.",
+    )
 
-    row = claim_row(dataset, claim_key)
-    assessment = assess_claim(domain, model, row, DEFAULT_RISK_THRESHOLDS)
-    st.subheader("Fraud risk assessment")
-    _render_assessment(assessment)
+    tab_motor, tab_health = st.tabs(["Motor Fraud Model", "Health Fraud Model"])
 
-    _render_forensics_panel(domain, model, dataset, claim_key)
-    _render_eval_metrics(model_dir)
+    for tab, tab_domain, m_dir in (
+        (tab_motor, MOTOR_DOMAIN, config.motor_model_dir()),
+        (tab_health, HEALTH_DOMAIN, config.health_model_dir()),
+    ):
+        with tab:
+            st.markdown(f"#### {tab_domain.title()} Insurance Risk Model")
+            st.caption(f"Model Artifact Location: `{m_dir}`")
+
+            metrics = load_eval_metrics(m_dir)
+            confusion = load_confusion_matrix(m_dir)
+
+            if metrics is None:
+                st.info(
+                    "No evaluation metrics sidecar found for this artifact. "
+                    "Run `scripts/train_models.py` to regenerate eval_metrics.json."
+                )
+            else:
+                m_cols = st.columns(5)
+                m_cols[0].metric("ROC-AUC", f"{metrics['roc_auc']:.3f}", help="Ranking performance across all probability thresholds")
+                m_cols[1].metric("Accuracy", f"{metrics['accuracy']:.3f}")
+                m_cols[2].metric("Precision", f"{metrics['precision']:.3f}", help="Proportion of flagged claims that are positive")
+                m_cols[3].metric("Recall", f"{metrics['recall']:.3f}", help="Proportion of true positive claims detected")
+                m_cols[4].metric("F1-Score", f"{metrics['f1']:.3f}", help="Harmonic mean of precision and recall")
+
+                st.caption(
+                    f"Evaluated on {metrics.get('n_samples', '—'):,} validation claims "
+                    f"({metrics.get('n_positive', '—'):,} fraud cases, "
+                    f"{metrics.get('n_positive', 0) / max(1, metrics.get('n_samples', 1)):.1%} prevalence) "
+                    f"at decision threshold {metrics.get('threshold', 0.5):.2f}."
+                )
+
+            if confusion is not None:
+                st.markdown("##### Confusion Matrix (Validation Split)")
+                render_confusion_matrix_card(confusion)
+
+            st.markdown("##### Methodological Transparency & Limitations")
+            if tab_domain == HEALTH_DOMAIN:
+                info_callout(
+                    "The health target is `claim_fraud_label_provider_derived`: each claim inherits its provider's "
+                    "PotentialFraud label. High validation performance reflects provider-level class separation, "
+                    "not ground-truth claim fraud adjudication.",
+                    title="Health Domain Label Derivation",
+                    variant="amber",
+                )
+            else:
+                info_callout(
+                    "Motor graph entities (garages and bank accounts) are synthetically augmented per project specifications. "
+                    "Graph centrality and community signals describe the constructed network rather than historical "
+                    "Indian telematics records.",
+                    title="Motor Domain Synthetic Graph Analytics",
+                    variant="amber",
+                )
+
+            st.caption(
+                "When fraud classes are rare (e.g. ~5.99% in motor claims), standard accuracy and 0.50-threshold precision "
+                "can appear low. ROC-AUC is the primary ranking metric for triage prioritization."
+            )
+
+
+# ---------------------------------------------------------------------------
+# Application Entry Point
+# ---------------------------------------------------------------------------
 
 
 def main() -> None:
-    _render_header()
+    inject_theme()
+    page, domain, sampling_params = _sidebar_controls()
 
-    domain, sampling_params = _sidebar_domain_and_sampling()
+    # Reset selection when switching domain
+    if st.session_state.get("_last_domain") != domain:
+        st.session_state["selected_claim_key"] = None
+        st.session_state["_last_domain"] = domain
+        st.session_state.pop("new_claim_result", None)
+
     model, model_dir = _load_model(domain)
     dataset = _load_dataset(domain, sampling_params)
+    scores = _get_scores(domain, model, dataset, sampling_params)
+    table = build_investigation_table(domain, dataset, scores)
 
-    tab_new, tab_hist = st.tabs(["📄 Upload & Analyze New Claim", "📊 Historical Claims Database"])
+    # Render system status in sidebar
+    sidebar_system_status(True, len(table), model_dir.name, domain)
+    sidebar_footer()
 
-    with tab_new:
-        _render_new_claim_tab(domain, model)
+    # Route navigation
+    if page == "Overview":
+        _render_overview(domain, model, table)
+    elif page == "Claims Investigation":
+        _render_claims(domain, model, dataset, table)
+    elif page == "Document Forensics":
+        _render_forensics_page(domain, model, dataset)
+    else:
+        _render_insights(domain, model_dir)
 
-    with tab_hist:
-        _render_historical_claims_tab(domain, model, dataset, model_dir)
 
-
-main()
+if __name__ == "__main__" or True:
+    main()

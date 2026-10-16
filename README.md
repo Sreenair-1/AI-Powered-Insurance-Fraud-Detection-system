@@ -66,7 +66,7 @@ data/raw/{motor,health,demographics}      src/data/
 | `src/models/` | `HealthFraudModel`/`MotorFraudModel` (XGBoost), shared evaluation metrics, JSON-based model persistence (no `pickle`) | `docs/model_health.md`, `docs/model_motor.md`, `docs/model_evaluation.md`, `docs/model_persistence.md`, `docs/model_evaluation_report.md` |
 | `src/explainability/` | SHAP `TreeExplainer`-based global/local explanations, per domain plus a shared model-agnostic layer | `docs/shap.md`, `docs/shap_health.md`, `docs/shap_motor.md` |
 | `src/pipeline/` | Wires fusion + model + evaluation + SHAP into one per-claim risk assessment call | `docs/pipeline.md` |
-| `app/` | Streamlit investigator UI: browse a claim, see forensic/graph/risk/SHAP evidence, upload a document (image/PDF) for re-scoring | `docs/app_ui.md` |
+| `app/` | InsureSight AI Streamlit investigator UI: overview KPIs, claims workspace, document forensics, and model insights | `docs/app_ui.md` |
 | `scripts/train_models.py` | Offline training entry point that produces the model artifacts `app/` loads | `docs/app_ui.md` |
 | `tests/` | Unit + integration tests | `docs/running.md` |
 
@@ -200,17 +200,19 @@ if either is absent.
 2. `./.venv/Scripts/python.exe scripts/train_models.py --domain both` — trains
    and saves both models (a few minutes; prints validation metrics per
    domain as it goes).
-3. `./.venv/Scripts/python.exe -m streamlit run app/main.py` — opens the UI.
-4. Pick a domain (health/motor) in the sidebar, adjust the sample-size
-   slider if wanted, and select a claim from the list.
-5. Review, for the selected claim: the raw claim fields, the graph-derived
-   relationship signals (shared entities, community membership, centrality),
-   the model's fraud probability and risk category, and the SHAP factors
-   driving that score.
-6. Optionally upload a document image in the "Document forensics" panel —
-   the app runs ELA/copy-move/metadata analysis on it and re-fuses +
-   re-scores that one claim with the real forensic signal, so the updated
-   score genuinely reflects the uploaded document, not a placeholder.
+3. `./.venv/Scripts/python.exe -m streamlit run app/main.py` — opens InsureSight AI.
+4. Use the sidebar to pick a domain (Health / Motor) and a workspace:
+   **Overview**, **Claims Investigation**, **Document Forensics**, or
+   **Model Insights**. Adjust the sample-size sliders if wanted.
+5. Overview shows model-scored KPIs for the *currently loaded sample*
+   (not precomputed dataset labels). Claims Investigation is a searchable
+   table; inspect one claim for attributes, graph signals, probability,
+   risk category, and claim-specific SHAP factors.
+6. Document Forensics reuses the existing ELA / copy-move / metadata
+   pipeline: attach a file to a loaded claim (re-fuse + re-score) or run a
+   new-claim document assessment with investigator-supplied attributes.
+7. Model Insights shows the training-time `eval_metrics.json` /
+   `confusion_matrix.json` sidecars for the selected domain only.
 
 ## Testing
 

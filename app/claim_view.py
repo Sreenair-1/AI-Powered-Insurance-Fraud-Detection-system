@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Optional, Union, cast
 
 import networkx as nx
+import numpy as np
 import pandas as pd
 
 from app.data_loader import HealthDataset, MotorDataset
@@ -95,6 +96,100 @@ def claim_row(dataset: Union[HealthDataset, MotorDataset], claim_key: str) -> pd
     if row.empty:
         raise ClaimViewError(f"claim_key {claim_key!r} not found in the loaded dataset")
     return row
+
+
+MOTOR_INVESTIGATION_COLUMNS = (
+    "Make",
+    "AccidentArea",
+    "Age",
+    "PolicyType",
+    "Fault",
+    "VehicleCategory",
+    "Year",
+)
+HEALTH_INVESTIGATION_COLUMNS = (
+    "ClaimID",
+    "claim_type",
+    "Provider",
+    "BeneID",
+    "InscClaimAmtReimbursed",
+    "AttendingPhysician",
+)
+GRAPH_SIGNAL_COLUMNS = (
+    "has_shared_entity",
+    "max_entity_claim_degree",
+    "community_id",
+    "degree_centrality",
+)
+
+
+def score_loaded_sample(
+    model: Union[HealthFraudModel, MotorFraudModel],
+    X: pd.DataFrame,
+    thresholds: RiskThresholds = DEFAULT_RISK_THRESHOLDS,
+) -> pd.DataFrame:
+    """Score every loaded claim with `predict_proba` only — no SHAP.
+
+    Overview KPIs and the investigation table need risk categories for the
+    current sample. Running `assess_claim` (and therefore TreeExplainer) on
+    every row would be far too expensive for a Streamlit rerun.
+    """
+    columns = [CLAIM_KEY_COL, "fraud_probability", "risk_category"]
+    if X.empty:
+        return pd.DataFrame(columns=columns)
+    if CLAIM_KEY_COL not in X.columns:
+        raise ClaimViewError(f"fused matrix is missing {CLAIM_KEY_COL}")
+
+    proba = np.asarray(model.predict_proba(X), dtype=float).reshape(-1)
+    if len(proba) != len(X):
+        raise ClaimViewError("model.predict_proba returned a different row count than X")
+
+    return pd.DataFrame(
+        {
+            CLAIM_KEY_COL: X[CLAIM_KEY_COL].astype(str).to_numpy(),
+            "fraud_probability": proba,
+            "risk_category": [categorize_risk(float(p), thresholds) for p in proba],
+        }
+    )
+
+
+def build_investigation_table(
+    domain: str,
+    dataset: Union[HealthDataset, MotorDataset],
+    scores: pd.DataFrame,
+) -> pd.DataFrame:
+    """Join sample scores with investigator-facing claim attributes.
+
+    Does not invent fields: only columns present on the loaded claims (or
+    fused graph features) are included.
+    """
+    if domain not in {MOTOR_DOMAIN, HEALTH_DOMAIN}:
+        raise ClaimViewError(f"unknown domain {domain!r}; expected {HEALTH_DOMAIN!r} or {MOTOR_DOMAIN!r}")
+    if scores.empty:
+        return scores.copy()
+
+    display = dataset.claims.copy()
+    if domain == MOTOR_DOMAIN:
+        display = display.copy()
+        display[CLAIM_KEY_COL] = display.index.map(lambda i: f"claim:{i}")
+        keep = [c for c in MOTOR_INVESTIGATION_COLUMNS if c in display.columns]
+    else:
+        if "ClaimID" not in display.columns:
+            raise ClaimViewError("health claims table is missing ClaimID")
+        display[CLAIM_KEY_COL] = "claim:" + display["ClaimID"].astype(str)
+        keep = [c for c in HEALTH_INVESTIGATION_COLUMNS if c in display.columns]
+
+    attr = display[[CLAIM_KEY_COL, *keep]].drop_duplicates(subset=[CLAIM_KEY_COL])
+    graph_keep = [c for c in GRAPH_SIGNAL_COLUMNS if c in dataset.X.columns]
+    graph = dataset.X[[CLAIM_KEY_COL, *graph_keep]].copy()
+    graph[CLAIM_KEY_COL] = graph[CLAIM_KEY_COL].astype(str)
+
+    out = scores.copy()
+    out[CLAIM_KEY_COL] = out[CLAIM_KEY_COL].astype(str)
+    out = out.merge(attr, on=CLAIM_KEY_COL, how="left")
+    out = out.merge(graph, on=CLAIM_KEY_COL, how="left")
+    out.insert(1, "domain", domain)
+    return out
 
 
 @dataclass(frozen=True)

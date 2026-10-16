@@ -138,6 +138,43 @@ def test_claim_row_missing_key_raises(motor_dataset_and_model):
         claim_view.claim_row(dataset, "claim:does-not-exist")
 
 
+def test_score_loaded_sample_motor_without_shap(motor_dataset_and_model):
+    dataset, model = motor_dataset_and_model
+    scores = claim_view.score_loaded_sample(model, dataset.X)
+
+    assert len(scores) == len(dataset.X)
+    assert list(scores.columns) == [CLAIM_KEY_COL, "fraud_probability", "risk_category"]
+    assert scores["risk_category"].isin(["low", "medium", "high"]).all()
+    assert scores["fraud_probability"].between(0.0, 1.0).all()
+    table = claim_view.build_investigation_table(claim_view.MOTOR_DOMAIN, dataset, scores)
+    assert CLAIM_KEY_COL in table.columns
+    assert "domain" in table.columns
+    assert table["domain"].eq("motor").all()
+    assert "Make" in table.columns
+
+
+def test_score_loaded_sample_health_table(health_dataset_and_model):
+    dataset, model = health_dataset_and_model
+    scores = claim_view.score_loaded_sample(model, dataset.X)
+    table = claim_view.build_investigation_table(claim_view.HEALTH_DOMAIN, dataset, scores)
+    assert len(table) == len(dataset.X)
+    assert "claim_type" in table.columns or "ClaimID" in table.columns
+
+
+def test_score_loaded_sample_empty_matrix(motor_dataset_and_model):
+    _, model = motor_dataset_and_model
+    empty = pd.DataFrame(columns=pd.Index([]))
+    scores = claim_view.score_loaded_sample(model, empty)
+    assert scores.empty
+
+
+def test_build_investigation_table_unknown_domain_raises(motor_dataset_and_model):
+    dataset, model = motor_dataset_and_model
+    scores = claim_view.score_loaded_sample(model, dataset.X)
+    with pytest.raises(claim_view.ClaimViewError):
+        claim_view.build_investigation_table("unknown", dataset, scores)
+
+
 # ---------------------------------------------------------------------------
 # run_forensic_checks
 # ---------------------------------------------------------------------------

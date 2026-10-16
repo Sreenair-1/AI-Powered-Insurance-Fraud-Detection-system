@@ -22,6 +22,7 @@ from src.models.persistence import ModelPersistenceError, load_health_model, loa
 PathLike = Union[str, Path]
 
 EVAL_METRICS_FILENAME = "eval_metrics.json"
+CONFUSION_MATRIX_FILENAME = "confusion_matrix.json"
 
 
 class ModelNotAvailableError(RuntimeError):
@@ -62,6 +63,19 @@ def load_eval_metrics(directory: PathLike) -> Optional[dict]:
     may not have one, and that is not an error.
     """
     path = Path(directory) / EVAL_METRICS_FILENAME
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_confusion_matrix(directory: PathLike) -> Optional[dict]:
+    """Load the `confusion_matrix.json` sidecar from training, if present.
+
+    Counts are from the held-out validation split at training time, not from
+    the interactive sample currently loaded in the app. Returns `None` when
+    the sidecar is absent.
+    """
+    path = Path(directory) / CONFUSION_MATRIX_FILENAME
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))

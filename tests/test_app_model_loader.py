@@ -12,10 +12,12 @@ import pandas as pd
 import pytest
 
 from app.model_loader import (
+    CONFUSION_MATRIX_FILENAME,
     EVAL_METRICS_FILENAME,
     ModelNotAvailableError,
     get_health_model,
     get_motor_model,
+    load_confusion_matrix,
     load_eval_metrics,
     load_health_model_or_raise,
     load_motor_model_or_raise,
@@ -121,6 +123,24 @@ def test_load_eval_metrics_reads_written_json(saved_health_model_dir):
     payload = {"accuracy": 0.9, "precision": 0.5, "recall": 0.5, "f1": 0.5, "roc_auc": 0.8}
     (directory / EVAL_METRICS_FILENAME).write_text(json.dumps(payload), encoding="utf-8")
     assert load_eval_metrics(directory) == payload
+
+
+def test_load_confusion_matrix_returns_none_when_absent(saved_health_model_dir):
+    directory, _ = saved_health_model_dir
+    assert load_confusion_matrix(directory) is None
+
+
+def test_load_confusion_matrix_reads_written_json(saved_health_model_dir):
+    directory, _ = saved_health_model_dir
+    payload = {
+        "true_negative": 10,
+        "false_positive": 1,
+        "false_negative": 2,
+        "true_positive": 3,
+        "threshold": 0.5,
+    }
+    (directory / CONFUSION_MATRIX_FILENAME).write_text(json.dumps(payload), encoding="utf-8")
+    assert load_confusion_matrix(directory) == payload
 
 
 # ---------------------------------------------------------------------------

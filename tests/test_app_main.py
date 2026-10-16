@@ -102,14 +102,36 @@ def app_environment(tmp_path, monkeypatch):
     return motor_dataset, health_dataset
 
 
-def test_app_loads_and_shows_motor_assessment_by_default(app_environment):
+def _markdown_text(at: AppTest) -> str:
+    return " ".join(str(m.value) for m in at.markdown)
+
+
+def test_app_loads_overview_by_default(app_environment):
     at = AppTest.from_file(str(APP_MAIN_PATH), default_timeout=60)
     at.run()
 
     assert not at.exception
-    assert any("Fraud risk assessment" in b.value for b in at.subheader)
-    assert any("fraud probability" in m.label.lower() for m in at.metric)
-    assert len(at.selectbox) == 1  # the claim picker
+    text = _markdown_text(at)
+    assert "InsureSight AI" in text
+    assert "Investigation overview" in text
+    assert len(at.radio) >= 2
+
+
+def test_app_claims_investigation_and_inspect(app_environment):
+    at = AppTest.from_file(str(APP_MAIN_PATH), default_timeout=60)
+    at.run()
+    assert not at.exception
+
+    at.radio[0].set_value("Claims Investigation")
+    at.run()
+    assert not at.exception
+    assert "Claims workspace" in _markdown_text(at)
+    inspect = [b for b in at.button if "Inspect claim" in str(b.label)]
+    assert inspect
+    inspect[0].click()
+    at.run()
+    assert not at.exception
+    assert any("fraud probability" in m.label.lower() or "model fraud probability" in m.label.lower() for m in at.metric)
 
 
 def test_app_switches_to_health_domain(app_environment):
@@ -117,12 +139,29 @@ def test_app_switches_to_health_domain(app_environment):
     at.run()
     assert not at.exception
 
-    at.radio[0].set_value("health")
+    at.radio[1].set_value("health")
     at.run()
 
     assert not at.exception
-    assert any("Fraud risk assessment" in b.value for b in at.subheader)
-    assert any("fraud probability" in m.label.lower() for m in at.metric)
+    assert "Investigation overview" in _markdown_text(at)
+
+
+def test_app_model_insights_page(app_environment):
+    at = AppTest.from_file(str(APP_MAIN_PATH), default_timeout=60)
+    at.run()
+    at.radio[0].set_value("Model Insights")
+    at.run()
+    assert not at.exception
+    assert "Transparency and evaluation" in _markdown_text(at)
+
+
+def test_app_document_forensics_page(app_environment):
+    at = AppTest.from_file(str(APP_MAIN_PATH), default_timeout=60)
+    at.run()
+    at.radio[0].set_value("Document Forensics")
+    at.run()
+    assert not at.exception
+    assert "Document workspace" in _markdown_text(at)
 
 
 def test_app_shows_actionable_error_when_model_missing(monkeypatch, tmp_path):
