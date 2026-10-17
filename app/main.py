@@ -43,6 +43,8 @@ from app.model_loader import (
     load_confusion_matrix,
     load_eval_metrics,
     load_pr_curve,
+    load_test_metrics,
+    load_threshold_selection,
     load_roc_curve,
 )
 from app.ui_components import (
@@ -740,8 +742,8 @@ def _render_insights(domain: str, active_model_dir: Path) -> None:
     page_header(
         "Model insights",
         "Transparency and evaluation",
-        "Evaluation benchmarks below reflect performance metrics on the held-out validation "
-        "splits computed at training time. They are strictly separate from interactive sample scores.",
+        "Validation results guide threshold selection. Final test results come from a separate "
+        "held-out split and are scored after model choices are frozen.",
     )
 
     tab_motor, tab_health = st.tabs(["Motor Fraud Model", "Health Fraud Model"])
@@ -755,6 +757,8 @@ def _render_insights(domain: str, active_model_dir: Path) -> None:
             st.caption(f"Model Artifact Location: `{m_dir}`")
 
             metrics = load_eval_metrics(m_dir)
+            test_results = load_test_metrics(m_dir)
+            threshold_info = load_threshold_selection(m_dir)
             confusion = load_confusion_matrix(m_dir)
             roc_data = load_roc_curve(m_dir)
             pr_data = load_pr_curve(m_dir)
@@ -762,14 +766,23 @@ def _render_insights(domain: str, active_model_dir: Path) -> None:
             if metrics is None:
                 st.info(
                     "No evaluation metrics sidecar found for this artifact. "
-                    "Run `scripts/train_models.py` to regenerate eval_metrics.json."
+                    "Run `scripts/train_models.py` to generate evaluation sidecars."
                 )
             else:
-                m_cols = st.columns(4)
+                st.markdown("##### Validation results (threshold selection split)")
+                if threshold_info:
+                    st.caption(
+                        f"Selected threshold: {threshold_info['threshold']:.3f} · "
+                        f"Objective: {threshold_info['objective']} · "
+                        f"Constraints: {threshold_info.get('constraints') or 'none'}"
+                    )
+                m_cols = st.columns(6)
                 m_cols[0].metric("ROC-AUC", f"{metrics['roc_auc']:.3f}", help="Ranking performance across all probability thresholds")
-                m_cols[1].metric("Accuracy", f"{metrics['accuracy']:.3f}", help="Overall proportion of correct classifications")
+                m_cols[1].metric("Average precision", f"{metrics.get('average_precision', float('nan')):.3f}", help="Area under the precision-recall curve summary")
                 m_cols[2].metric("Precision", f"{metrics['precision']:.3f}", help="Proportion of flagged claims that are positive")
                 m_cols[3].metric("Recall", f"{metrics['recall']:.3f}", help="Proportion of true positive claims detected")
+                m_cols[4].metric("Specificity", f"{metrics.get('specificity', float('nan')):.3f}")
+                m_cols[5].metric("Balanced accuracy", f"{metrics.get('balanced_accuracy', float('nan')):.3f}")
 
                 n_samp = metrics.get("n_samples", "—")
                 n_pos = metrics.get("n_positive", "—")
@@ -785,9 +798,29 @@ def _render_insights(domain: str, active_model_dir: Path) -> None:
                     f'</div>',
                     unsafe_allow_html=True,
                 )
+                st.caption(
+                    f"Validation review volume: {metrics.get('review_volume', '—')} of "
+                    f"{metrics.get('n_samples', '—')} claims ({metrics.get('review_rate', 0):.1%})."
+                )
+
+                if test_results is not None:
+                    final_metrics = test_results.get("selected_threshold_metrics", {})
+                    st.markdown("##### Final test results (untouched during fitting and selection)")
+                    test_cols = st.columns(4)
+                    test_cols[0].metric("ROC-AUC", f"{final_metrics.get('roc_auc', float('nan')):.3f}")
+                    test_cols[1].metric("Average precision", f"{final_metrics.get('average_precision', float('nan')):.3f}")
+                    test_cols[2].metric("Precision", f"{final_metrics.get('precision', float('nan')):.3f}")
+                    test_cols[3].metric("Recall", f"{final_metrics.get('recall', float('nan')):.3f}")
+                    st.caption(
+                        f"Frozen validation threshold: {test_results.get('threshold_frozen_from_validation', 0.5):.3f} · "
+                        f"Test review volume: {final_metrics.get('review_volume', '—')} of {final_metrics.get('n_samples', '—')} claims"
+                    )
+                    if test_results.get("confusion_matrix"):
+                        st.markdown("**Final test confusion matrix**")
+                        render_confusion_matrix_card(test_results["confusion_matrix"])
 
             if confusion is not None:
-                st.markdown("##### Confusion Matrix & Diagnostic Performance")
+                st.markdown("##### Validation confusion matrix")
                 render_confusion_matrix_card(confusion)
 
             render_evaluation_curves(roc_data=roc_data, pr_data=pr_data, roc_auc=metrics.get("roc_auc") if metrics else None)
@@ -803,10 +836,9 @@ def _render_insights(domain: str, active_model_dir: Path) -> None:
                 )
             else:
                 info_callout(
-                    "Motor graph entities (garages and bank accounts) are synthetically augmented per project specifications. "
-                    "Graph centrality and community signals describe the constructed network rather than historical "
-                    "Indian telematics records.",
-                    title="Motor Domain Synthetic Graph Analytics",
+                    "Motor model training uses structured claim attributes. Synthetic garage and bank account "
+                    "relationships are excluded because they are not observed claims data.",
+                    title="Motor Domain Feature Scope",
                     variant="amber",
                 )
 

@@ -25,6 +25,8 @@ EVAL_METRICS_FILENAME = "eval_metrics.json"
 CONFUSION_MATRIX_FILENAME = "confusion_matrix.json"
 ROC_CURVE_FILENAME = "roc_curve.json"
 PR_CURVE_FILENAME = "pr_curve.json"
+TEST_METRICS_FILENAME = "test_metrics.json"
+THRESHOLD_SELECTION_FILENAME = "threshold_selection.json"
 
 
 class ModelNotAvailableError(RuntimeError):
@@ -78,6 +80,22 @@ def load_confusion_matrix(directory: PathLike) -> Optional[dict]:
     the sidecar is absent.
     """
     path = Path(directory) / CONFUSION_MATRIX_FILENAME
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_test_metrics(directory: PathLike) -> Optional[dict]:
+    """Load separately persisted final test results, when present."""
+    path = Path(directory) / TEST_METRICS_FILENAME
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_threshold_selection(directory: PathLike) -> Optional[dict]:
+    """Load validation threshold objective and constraint metadata."""
+    path = Path(directory) / THRESHOLD_SELECTION_FILENAME
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))

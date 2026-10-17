@@ -35,6 +35,10 @@ _LEAKAGE_COLUMNS = frozenset(
         HEALTH_CLAIM_LABEL_PROVIDER_DERIVED_COL,
         "synthetic_fraud_ring_label",
         "synthetic_ring_id",
+        # These two columns are invented by the demo augmentation and have
+        # no counterpart in the observed motor claims dataset.
+        "GarageID",
+        "BankAccountID",
     }
 )
 

@@ -1,39 +1,9 @@
-"""Fit HealthFraudModel/MotorFraudModel on real data and save them for the Streamlit app.
+"""Train fraud-risk models with train/validation/test separation.
 
-The app (`app/`) only loads already-trained model artifacts (see
-`docs/model_persistence.md`, `docs/app_ui.md`) -- it never fits in-process.
-This script is the one-time (or re-run-when-you-want-a-fresh-model) step
-that produces those artifacts.
-
-Default sample sizes train on the full motor dataset (15,420 claims;
-`--motor-sample-size` default of 20,000 exceeds it, so `_sample()` uses all
-of it) and a 28,000-claim health sample (8,000 inpatient + 20,000
-outpatient, out of ~558K available) -- large enough to materially improve
-validation ROC-AUC/F1 over a small demo sample while still finishing in
-under two minutes combined on ordinary hardware, now that graph centrality
-scales (`src/graph/features.py` auto-switches to an approximate/cached
-computation above 1,500 graph nodes; see `docs/graph.md`). See
-`docs/model_training_experiment.md` for the experiment that established
-these defaults, including the smaller-sample numbers they replaced. Lower
-`--motor-sample-size` / `--health-inpatient-sample-size` /
-`--health-outpatient-sample-size` for a faster (weaker) model;
-`data/raw/` must be present locally either way (see `docs/data_contract.md`).
-
-Usage:
-    ./.venv/Scripts/python.exe scripts/train_models.py --domain both
-    ./.venv/Scripts/python.exe scripts/train_models.py --domain motor --motor-sample-size 5000
-    ./.venv/Scripts/python.exe scripts/train_models.py --domain health \\
-        --health-inpatient-sample-size 400 --health-outpatient-sample-size 900
-
-Writes, per domain, into `<output-dir>/<domain>/`:
-    model.json           -- via src.models.persistence
-    metadata.json         -- via src.models.persistence
-    eval_metrics.json     -- Accuracy/Precision/Recall/F1/ROC-AUC on a held-out
-                              validation split (src.models.evaluation), read by
-                              app/model_loader.py's load_eval_metrics()
-    confusion_matrix.json -- TN/FP/FN/TP on the same held-out validation split
-                              (src.models.evaluation.evaluate_confusion_matrix);
-                              not read by the app today, informational only.
+Validation drives model/threshold choices; the test partition is scored once
+after choices are frozen. Motor training compares split-local synthetic graph
+features to structured features, then excludes the graph if validation does
+not support it.
 """
 from __future__ import annotations
 
@@ -44,184 +14,211 @@ from pathlib import Path
 from typing import Optional
 
 if __name__ == "__main__" and __package__ is None:
-    # Allow `python scripts/train_models.py` directly (not just `-m`) by
-    # putting the project root, not this script's own directory, on
-    # sys.path so the `src`/`app` packages resolve.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd
 
-from src.data import preprocessing
 from src.data.loaders import DatasetFileMissingError, load_health_train_tables, load_motor_claims
-from src.data.schemas import (
-    HEALTH_PROVIDER_COL,
-    HEALTH_PROVIDER_LABEL_COL,
-    MOTOR_TARGET,
-    PROJECT_ROOT,
-)
+from src.data.schemas import (HEALTH_PROVIDER_COL, HEALTH_PROVIDER_LABEL_COL, MOTOR_TARGET, PROJECT_ROOT)
 from src.data.splits import assign_claims_to_provider_splits, split_dataframe, split_health_providers
-from src.data.synthetic import build_motor_synthetic_augmentation
-from src.features.fusion import fuse_health_claims, fuse_motor_claims
-from src.features.structured import CLAIM_KEY_COL
-from src.models.evaluation import (
-    ClassificationMetrics,
-    ConfusionMatrix,
-    evaluate_confusion_matrix,
-    evaluate_model,
-)
+from src.features.fusion import build_health_target
+from src.features.structured import build_health_structured_features, build_motor_structured_features
+from src.features.graph import build_graph_claim_features
+from src.data.synthetic import assign_synthetic_entities
+from src.graph.construction import build_motor_graph
+from src.models.evaluation import compute_classification_metrics, compute_confusion_matrix, curve_data, select_threshold
 from src.models.health import HealthFraudModel
 from src.models.motor import MotorFraudModel
 from src.models.persistence import save_health_model, save_motor_model
 
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "models"
-DEFAULT_SEED = 42
-
-DEFAULT_MOTOR_SAMPLE_SIZE = 20000
-DEFAULT_HEALTH_INPATIENT_SAMPLE_SIZE = 8000
-DEFAULT_HEALTH_OUTPATIENT_SAMPLE_SIZE = 20000
-
-EVAL_METRICS_FILENAME = "eval_metrics.json"
-CONFUSION_MATRIX_FILENAME = "confusion_matrix.json"
 
 
-def _sample(df: pd.DataFrame, n: Optional[int], seed: int) -> pd.DataFrame:
-    if n is None or len(df) <= n:
-        return df
-    return df.sample(n=n, random_state=seed)
+def _write_json(directory: Path, name: str, payload) -> None:
+    (directory / name).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def _write_eval_metrics(directory: Path, metrics: Optional[ClassificationMetrics]) -> None:
-    if metrics is None:
-        return
-    (directory / EVAL_METRICS_FILENAME).write_text(
-        json.dumps(metrics.to_dict(), indent=2), encoding="utf-8"
-    )
+def _fit_validation_candidate(model_factory, candidates, X_train, y_train, X_val, y_val):
+    """Small, fixed candidate sweep ranked by validation average precision."""
+    results = []
+    for params in candidates:
+        model = model_factory(params).fit(X_train, y_train)
+        metrics = compute_classification_metrics(y_val, model.predict_proba(X_val), 0.5)
+        results.append((metrics.average_precision, params, model))
+    score, params, model = max(results, key=lambda row: row[0])
+    return model, {"selection_metric": "validation_average_precision", "candidates": [
+        {"parameters": p, "validation_average_precision": s} for s, p, _ in results
+    ], "selected_parameters": params, "selected_validation_average_precision": score}
 
 
-def _write_confusion_matrix(directory: Path, confusion: Optional[ConfusionMatrix]) -> None:
-    if confusion is None:
-        return
-    (directory / CONFUSION_MATRIX_FILENAME).write_text(
-        json.dumps(confusion.to_dict(), indent=2), encoding="utf-8"
-    )
+def _motor_features_for_split(claims: pd.DataFrame, seed: int = 42) -> pd.DataFrame:
+    """Structured features plus graph features computed inside this split only."""
+    entities = assign_synthetic_entities(claims, seed=seed)
+    graph = build_motor_graph(entities)
+    structured = build_motor_structured_features(entities)
+    graph_features = build_graph_claim_features(graph, structured["claim_key"])
+    return structured.merge(graph_features, on="claim_key", validate="one_to_one")
 
 
-def train_motor(output_dir: Path, sample_size: int, seed: int) -> None:
-    print(f"[motor] loading data/raw/motor/fraud_oracle.csv ...")
+def _evaluate_and_save(model, X_val, y_val, X_test, y_test, directory: Path, objective: str,
+                       min_precision: float | None, min_recall: float | None,
+                       review_capacity: int | None) -> None:
+    p_val = model.predict_proba(X_val)
+    selection = select_threshold(y_val, p_val, objective, min_precision=min_precision,
+                                 min_recall=min_recall, review_capacity=review_capacity)
+    val_metrics = compute_classification_metrics(y_val, p_val, selection.threshold)
+    val_metrics_baseline = compute_classification_metrics(y_val, p_val, 0.5)
+    p_test = model.predict_proba(X_test)
+    test_metrics = compute_classification_metrics(y_test, p_test, selection.threshold)
+    test_baseline = compute_classification_metrics(y_test, p_test, 0.5)
+    roc_data, pr_data = curve_data(y_val, p_val)
+    _write_json(directory, "eval_metrics.json", val_metrics.to_dict())
+    _write_json(directory, "validation_metrics.json", {
+        "split": "validation", "threshold_selection": selection.to_dict(),
+        "selected_threshold_metrics": val_metrics.to_dict(),
+        "baseline_0_50_metrics": val_metrics_baseline.to_dict(),
+    })
+    _write_json(directory, "threshold_selection.json", selection.to_dict())
+    _write_json(directory, "test_metrics.json", {
+        "split": "untouched_test", "threshold_frozen_from_validation": selection.threshold,
+        "selected_threshold_metrics": test_metrics.to_dict(),
+        "baseline_0_50_metrics": test_baseline.to_dict(),
+        "confusion_matrix": compute_confusion_matrix(y_test, p_test, selection.threshold).to_dict(),
+    })
+    _write_json(directory, "confusion_matrix.json",
+                compute_confusion_matrix(y_val, p_val, selection.threshold).to_dict())
+    _write_json(directory, "roc_curve.json", roc_data)
+    _write_json(directory, "pr_curve.json", pr_data)
+    print(f"validation threshold selection: {selection.to_dict()}")
+    print(f"validation baseline @0.50: {val_metrics_baseline.to_dict()}")
+    print(f"untouched test @frozen threshold: {test_metrics.to_dict()}")
+
+
+def train_motor(output_dir: Path, sample_size: int | None, seed: int, objective: str = "max_f1",
+                min_precision: float | None = None, min_recall: float | None = None,
+                review_capacity: int | None = None) -> None:
     raw = load_motor_claims()
-    sampled = _sample(raw, sample_size, seed)
-    print(f"[motor] training on a sample of {len(sampled)}/{len(raw)} claims")
+    raw_duplicate_rows = int(raw.duplicated().sum())
+    if sample_size is not None and len(raw) > sample_size:
+        raw = raw.sample(n=sample_size, random_state=seed)
+    train, val, test = split_dataframe(raw, MOTOR_TARGET, random_state=seed)
+    y_train, y_val, y_test = (part[MOTOR_TARGET].astype(int) for part in (train, val, test))
+    representations = {}
+    for representation, builder in (("structured_only", lambda df: build_motor_structured_features(df)),
+                                    ("structured_plus_split_graph", lambda df: _motor_features_for_split(df, seed))):
+        parts = {name: builder(part) for name, part in (("train", train), ("val", val), ("test", test))}
+        candidate, experiment = _fit_validation_candidate(
+            lambda params: MotorFraudModel(params=params), [{}, {"max_depth": 3}],
+            parts["train"], y_train, parts["val"], y_val,
+        )
+        representations[representation] = (experiment["selected_validation_average_precision"], candidate, experiment, parts)
+    chosen_name, (chosen_ap, model, experiment, parts) = max(
+        representations.items(), key=lambda item: item[1][0]
+    )
+    experiment["representation_comparison"] = {
+        name: {"validation_average_precision": result[0]} for name, result in representations.items()
+    }
+    experiment["selected_representation"] = chosen_name
+    out = save_motor_model(model, output_dir)
+    _write_json(out, "validation_experiment.json", experiment)
+    _write_json(out, "data_audit.json", {
+        "dataset_rows": int(len(raw)), "exact_duplicate_rows": raw_duplicate_rows,
+        "native_claim_identifier": None,
+        "split_strategy": "stratified row split; source has no claim identifier",
+        "selected_features": "structured only" if chosen_name == "structured_only" else "structured plus split-local synthetic graph",
+        "synthetic_graph_representation_comparison": experiment["representation_comparison"],
+    })
+    _evaluate_and_save(model, parts["val"], y_val, parts["test"], y_test, out, objective,
+                       min_precision, min_recall, review_capacity)
+    print(f"motor row prevalence: train={y_train.mean():.3%}, validation={y_val.mean():.3%}, test={y_test.mean():.3%}")
+    print(f"motor selected representation: {chosen_name} (validation AP={chosen_ap:.4f}); graph features are split-local")
 
-    augmentation = build_motor_synthetic_augmentation(motor_df=sampled, seed=seed)
-    claims = augmentation.claims
 
-    print("[motor] building entity graph + fused feature matrix (this is the slow step)...")
-    from src.graph.construction import build_motor_graph
-
-    graph = build_motor_graph(claims)
-    X, y = fuse_motor_claims(claims, graph)
-
-    train_df, val_df, _test_df = split_dataframe(claims, stratify_col=MOTOR_TARGET, random_state=seed)
-    train_keys = {f"claim:{idx}" for idx in train_df.index}
-    val_keys = {f"claim:{idx}" for idx in val_df.index}
-    train_mask = X[CLAIM_KEY_COL].isin(train_keys)
-    val_mask = X[CLAIM_KEY_COL].isin(val_keys)
-
-    print(f"[motor] fitting on {int(train_mask.sum())} training claims...")
-    model = MotorFraudModel()
-    model.fit(X[train_mask], y[train_mask])
-
-    metrics = evaluate_model(model, X[val_mask], y[val_mask]) if val_mask.any() else None
-    confusion = evaluate_confusion_matrix(model, X[val_mask], y[val_mask]) if val_mask.any() else None
-    if metrics is not None:
-        print(f"[motor] validation metrics ({int(val_mask.sum())} claims): {metrics.to_dict()}")
-        print(f"[motor] confusion matrix: {confusion.to_dict()}")
-    else:
-        print("[motor] no validation claims available -- skipping evaluation")
-
-    out_dir = save_motor_model(model, output_dir)
-    _write_eval_metrics(out_dir, metrics)
-    _write_confusion_matrix(out_dir, confusion)
-    print(f"[motor] saved model to {out_dir}")
-
-
-def train_health(
-    output_dir: Path, inpatient_sample_size: int, outpatient_sample_size: int, seed: int
-) -> None:
-    print("[health] loading data/raw/health/Train*.csv ...")
+def train_health(output_dir: Path, inpatient_sample_size: int | None, outpatient_sample_size: int | None,
+                 seed: int, objective: str = "max_f1", min_precision: float | None = None,
+                 min_recall: float | None = None, review_capacity: int | None = None) -> None:
     tables = load_health_train_tables()
-    inpatient = _sample(tables.inpatient, inpatient_sample_size, seed)
-    outpatient = _sample(tables.outpatient, outpatient_sample_size, seed)
+    source_claim_ids = [tables.inpatient["ClaimID"].astype(str), tables.outpatient["ClaimID"].astype(str)]
+    source_id_overlap = len(set(source_claim_ids[0]) & set(source_claim_ids[1]))
+    duplicate_ip_ids = int(tables.inpatient["ClaimID"].duplicated().sum())
+    duplicate_op_ids = int(tables.outpatient["ClaimID"].duplicated().sum())
+    inpatient = tables.inpatient
+    outpatient = tables.outpatient
+    if inpatient_sample_size is not None and len(inpatient) > inpatient_sample_size:
+        inpatient = inpatient.sample(n=inpatient_sample_size, random_state=seed)
+    if outpatient_sample_size is not None and len(outpatient) > outpatient_sample_size:
+        outpatient = outpatient.sample(n=outpatient_sample_size, random_state=seed)
+    claim_labels = build_health_target(inpatient, outpatient, tables.main)
+    claims = pd.concat([inpatient, outpatient], ignore_index=True, sort=False)
+    providers = tables.main[tables.main[HEALTH_PROVIDER_COL].isin(claims[HEALTH_PROVIDER_COL])]
+    split_map = split_health_providers(providers, HEALTH_PROVIDER_COL, HEALTH_PROVIDER_LABEL_COL, random_state=seed)
+    split = assign_claims_to_provider_splits(claims, HEALTH_PROVIDER_COL, split_map).to_numpy()
+    split_integrity = pd.DataFrame({HEALTH_PROVIDER_COL: claims[HEALTH_PROVIDER_COL].to_numpy(), "split": split})
+    provider_split_overlap = int((split_integrity.groupby(HEALTH_PROVIDER_COL)["split"].nunique() > 1).sum())
+    if provider_split_overlap:
+        raise ValueError(f"provider split integrity failed: {provider_split_overlap} providers cross splits")
+    structured = build_health_structured_features(inpatient, outpatient, tables.beneficiary)
+    labeled = structured.merge(claim_labels, on="claim_key", validate="one_to_one")
+    # claim labels preserve combined inpatient/outpatient order; keys provide the alignment.
+    split_by_key = pd.DataFrame({"claim_key": [f"claim:{c}" for c in claims["ClaimID"]], "split": split})
+    labeled = labeled.merge(split_by_key, on="claim_key", validate="one_to_one")
+    partitions = {name: labeled[labeled["split"] == name].drop(columns=["target", "split"])
+                  for name in ("train", "val", "test")}
+    labels = {name: labeled.loc[labeled["split"] == name, "target"].astype(int) for name in partitions}
+    model, experiment = _fit_validation_candidate(
+        lambda params: HealthFraudModel(**params), [{}, {"max_depth": 3}],
+        partitions["train"], labels["train"], partitions["val"], labels["val"],
+    )
+    out = save_health_model(model, output_dir)
+    _write_json(out, "validation_experiment.json", experiment)
+    provider_prevalence = tables.main[HEALTH_PROVIDER_LABEL_COL].eq("Yes").mean()
+    sampled_provider_prevalence = providers[HEALTH_PROVIDER_LABEL_COL].eq("Yes").mean()
+    val_prevalence = labels["val"].mean()
+    _write_json(out, "data_audit.json", {
+        "labeled_provider_count": int(tables.main[HEALTH_PROVIDER_COL].nunique()),
+        "full_provider_positive_prevalence": float(provider_prevalence),
+        "sampled_claim_count": int(len(labeled)),
+        "sampled_claim_proxy_positive_prevalence": float(labeled["target"].mean()),
+        "validation_claim_proxy_positive_prevalence": float(val_prevalence),
+        "inpatient_duplicate_claim_ids": duplicate_ip_ids,
+        "outpatient_duplicate_claim_ids": duplicate_op_ids,
+        "claim_id_overlap_between_sources": source_id_overlap,
+        "providers_crossing_splits": provider_split_overlap,
+        "label_semantics": "PotentialFraud is provider-derived and inherited by claims; not verified claim-level fraud",
+    })
+    _evaluate_and_save(model, partitions["val"], labels["val"], partitions["test"], labels["test"], out,
+                       objective, min_precision, min_recall, review_capacity)
     print(
-        f"[health] training on a sample of {len(inpatient)}/{len(tables.inpatient)} inpatient + "
-        f"{len(outpatient)}/{len(tables.outpatient)} outpatient claims"
+        f"health PotentialFraud provider prevalence: full labeled provider table={provider_prevalence:.3%}; "
+        f"providers represented in sampled claims={sampled_provider_prevalence:.3%}; "
+        f"sampled claim-level proxy={labeled['target'].mean():.3%}; "
+        f"validation claim-level proxy={val_prevalence:.3%}"
     )
-
-    claims = preprocessing.build_health_claims_table(inpatient, outpatient)
-
-    print("[health] building entity graph + fused feature matrix (this is the slow step)...")
-    from src.graph.construction import build_health_graph
-
-    graph = build_health_graph(claims)
-    X, y = fuse_health_claims(inpatient, outpatient, tables.beneficiary, tables.main, graph)
-
-    # Provider-grouped split, restricted to the providers actually present in
-    # this sample (see docs/data_contract.md section 10 -- PotentialFraud is
-    # provider-level, so claims must never be split independently of their
-    # provider).
-    providers_in_sample = tables.main[tables.main[HEALTH_PROVIDER_COL].isin(claims[HEALTH_PROVIDER_COL])]
-    provider_split_map = split_health_providers(
-        providers_in_sample, HEALTH_PROVIDER_COL, HEALTH_PROVIDER_LABEL_COL, random_state=seed
-    )
-    claim_split = assign_claims_to_provider_splits(claims, HEALTH_PROVIDER_COL, provider_split_map)
-    train_keys = {f"claim:{cid}" for cid in claims.loc[claim_split == "train", "ClaimID"]}
-    val_keys = {f"claim:{cid}" for cid in claims.loc[claim_split == "val", "ClaimID"]}
-    train_mask = X[CLAIM_KEY_COL].isin(train_keys)
-    val_mask = X[CLAIM_KEY_COL].isin(val_keys)
-
-    print(f"[health] fitting on {int(train_mask.sum())} training claims...")
-    model = HealthFraudModel()
-    model.fit(X[train_mask], y[train_mask])
-
-    metrics = evaluate_model(model, X[val_mask], y[val_mask]) if val_mask.any() else None
-    confusion = evaluate_confusion_matrix(model, X[val_mask], y[val_mask]) if val_mask.any() else None
-    if metrics is not None:
-        print(f"[health] validation metrics ({int(val_mask.sum())} claims): {metrics.to_dict()}")
-        print(f"[health] confusion matrix: {confusion.to_dict()}")
-    else:
-        print("[health] no validation claims available -- skipping evaluation")
-
-    out_dir = save_health_model(model, output_dir)
-    _write_eval_metrics(out_dir, metrics)
-    _write_confusion_matrix(out_dir, confusion)
-    print(f"[health] saved model to {out_dir}")
+    print("The claim-level rate is higher because claims inherit provider labels and the sample weights providers by claim volume.")
+    print("Health target is a provider-derived PotentialFraud proxy, not verified claim-level fraud.")
 
 
 def main(argv: Optional[list] = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--domain", choices=["health", "motor", "both"], default="both")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--motor-sample-size", type=int, default=DEFAULT_MOTOR_SAMPLE_SIZE)
-    parser.add_argument(
-        "--health-inpatient-sample-size", type=int, default=DEFAULT_HEALTH_INPATIENT_SAMPLE_SIZE
-    )
-    parser.add_argument(
-        "--health-outpatient-sample-size", type=int, default=DEFAULT_HEALTH_OUTPATIENT_SAMPLE_SIZE
-    )
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--motor-sample-size", type=int, default=20000)
+    parser.add_argument("--health-inpatient-sample-size", type=int, default=8000)
+    parser.add_argument("--health-outpatient-sample-size", type=int, default=20000)
+    parser.add_argument("--threshold-objective", choices=["max_f1", "recall_at_precision", "precision_at_recall", "review_capacity"], default="max_f1")
+    parser.add_argument("--min-precision", type=float)
+    parser.add_argument("--min-recall", type=float)
+    parser.add_argument("--review-capacity", type=int)
     args = parser.parse_args(argv)
-
     try:
+        opts = (args.threshold_objective, args.min_precision, args.min_recall, args.review_capacity)
         if args.domain in ("motor", "both"):
-            train_motor(args.output_dir / "motor", args.motor_sample_size, args.seed)
+            train_motor(args.output_dir / "motor", args.motor_sample_size, args.seed, *opts)
         if args.domain in ("health", "both"):
-            train_health(
-                args.output_dir / "health",
-                args.health_inpatient_sample_size,
-                args.health_outpatient_sample_size,
-                args.seed,
-            )
-    except DatasetFileMissingError as exc:
+            train_health(args.output_dir / "health", args.health_inpatient_sample_size,
+                         args.health_outpatient_sample_size, args.seed, *opts)
+    except (DatasetFileMissingError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0

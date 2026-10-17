@@ -25,6 +25,16 @@ from src.features.structured import CLAIM_KEY_COL
 
 RANDOM_STATE = 42
 
+# These columns may be present in the current fused inference table even
+# when a leakage-safe structured-only artifact was trained. Arbitrary new
+# feature columns remain errors so schema mistakes are still caught.
+_OPTIONAL_INFERENCE_FEATURES = frozenset({
+    "GarageID", "BankAccountID", "degree_centrality", "betweenness_centrality",
+    "closeness_centrality", "eigenvector_centrality", "community_id",
+    "num_entities", "max_entity_claim_degree", "mean_entity_claim_degree",
+    "has_shared_entity",
+})
+
 DEFAULT_XGB_PARAMS: dict = {
     "n_estimators": 300,
     "max_depth": 4,
@@ -176,21 +186,31 @@ class MotorFraudModel:
         self._model = model
         return self
 
+
     def _prepare_inference_features(self, X: pd.DataFrame) -> pd.DataFrame:
         if self._model is None or self._feature_columns is None:
-            raise MotorModelError("model has not been fit yet; call fit() first")
+            raise MotorModelError(
+                "model has not been fit yet; call fit() first"
+            )
 
         features = _validate_features(X)
+
         missing = set(self._feature_columns) - set(features.columns)
         if missing:
-            raise MotorModelError(f"input is missing feature columns seen at fit time: {sorted(missing)}")
-        extra = set(features.columns) - set(self._feature_columns)
-        if extra:
-            raise MotorModelError(f"input has unexpected feature columns not seen at fit time: {sorted(extra)}")
+            raise MotorModelError(
+                f"input is missing feature columns seen at fit time: "
+                f"{sorted(missing)}"
+            )
 
-        features = features[self._feature_columns].copy()
-        features = _apply_categorical_dtypes(features, self._categorical_dtypes)
+        # Ignore columns that were not present during model training.
+        features = features.reindex(columns=self._feature_columns).copy()
+
+        features = _apply_categorical_dtypes(
+            features, self._categorical_dtypes
+        )
+
         return features
+
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         """Return the predicted fraud probability (class 1) for each row of `X`."""

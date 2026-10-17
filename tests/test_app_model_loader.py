@@ -19,6 +19,8 @@ from app.model_loader import (
     get_motor_model,
     load_confusion_matrix,
     load_eval_metrics,
+    load_test_metrics,
+    load_threshold_selection,
     load_health_model_or_raise,
     load_motor_model_or_raise,
 )
@@ -123,6 +125,17 @@ def test_load_eval_metrics_reads_written_json(saved_health_model_dir):
     payload = {"accuracy": 0.9, "precision": 0.5, "recall": 0.5, "f1": 0.5, "roc_auc": 0.8}
     (directory / EVAL_METRICS_FILENAME).write_text(json.dumps(payload), encoding="utf-8")
     assert load_eval_metrics(directory) == payload
+
+
+def test_load_test_and_threshold_selection_sidecars(tmp_path):
+    test_payload = {"split": "untouched_test", "threshold_frozen_from_validation": 0.4}
+    threshold_payload = {"threshold": 0.4, "objective": "max_f1", "constraints": {}}
+    assert load_test_metrics(tmp_path) is None
+    assert load_threshold_selection(tmp_path) is None
+    (tmp_path / "test_metrics.json").write_text(json.dumps(test_payload), encoding="utf-8")
+    (tmp_path / "threshold_selection.json").write_text(json.dumps(threshold_payload), encoding="utf-8")
+    assert load_test_metrics(tmp_path) == test_payload
+    assert load_threshold_selection(tmp_path) == threshold_payload
 
 
 def test_load_confusion_matrix_returns_none_when_absent(saved_health_model_dir):

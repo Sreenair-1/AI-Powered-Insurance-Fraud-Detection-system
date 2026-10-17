@@ -82,9 +82,13 @@ def test_build_motor_structured_features_drops_leakage_columns_defensively():
     df = _tiny_motor_df()
     df["synthetic_fraud_ring_label"] = 1
     df["synthetic_ring_id"] = "R1"
+    df["GarageID"] = "synthetic-garage"
+    df["BankAccountID"] = "synthetic-account"
     out = structured.build_motor_structured_features(df)
     assert "synthetic_fraud_ring_label" not in out.columns
     assert "synthetic_ring_id" not in out.columns
+    assert "GarageID" not in out.columns
+    assert "BankAccountID" not in out.columns
 
 
 # ---------------------------------------------------------------------------

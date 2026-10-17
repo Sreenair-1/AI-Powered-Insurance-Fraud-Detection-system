@@ -93,6 +93,11 @@ def test_returns_classification_metrics_instance_and_to_dict():
         "threshold",
         "n_samples",
         "n_positive",
+        "average_precision",
+        "specificity",
+        "balanced_accuracy",
+        "review_volume",
+        "review_rate",
     }
 
 

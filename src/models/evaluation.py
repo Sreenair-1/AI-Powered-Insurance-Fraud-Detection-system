@@ -1,34 +1,20 @@
-"""Shared classification evaluation metrics for fraud risk models.
-
-Scores both `HealthFraudModel` (`src.models.health`) and `MotorFraudModel`
-(`src.models.motor`) on held-out val/test splits with a consistent metric
-set: Accuracy, Precision, Recall, F1, ROC-AUC.
-
-These are model-behavior diagnostics, not a fraud determination — a low
-precision or high false-positive rate describes the model's performance on
-a split, not any individual claim.
-"""
+"""Binary fraud-risk evaluation and validation-only threshold selection."""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Protocol, Union
+from typing import Literal, Protocol
 
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
-    accuracy_score,
-    confusion_matrix,
-    f1_score,
-    precision_score,
-    recall_score,
-    roc_auc_score,
+    accuracy_score, average_precision_score, balanced_accuracy_score,
+    confusion_matrix, f1_score, precision_recall_curve, precision_score,
+    recall_score, roc_auc_score, roc_curve,
 )
 
 
 @dataclass(frozen=True)
 class ClassificationMetrics:
-    """Accuracy/Precision/Recall/F1/ROC-AUC for one evaluation run."""
-
     accuracy: float
     precision: float
     recall: float
@@ -37,20 +23,18 @@ class ClassificationMetrics:
     threshold: float
     n_samples: int
     n_positive: int
+    average_precision: float = 0.0
+    specificity: float = 0.0
+    balanced_accuracy: float = 0.0
+    review_volume: int = 0
+    review_rate: float = 0.0
 
     def to_dict(self) -> dict[str, float]:
-        """Flat dict representation, e.g. for logging or a Streamlit table."""
         return asdict(self)
 
 
 @dataclass(frozen=True)
 class ConfusionMatrix:
-    """Binary confusion matrix counts at one threshold.
-
-    Model-behavior diagnostic on a held-out split, same caveat as
-    `ClassificationMetrics`: describes the model, not any individual claim.
-    """
-
     true_negative: int
     false_positive: int
     false_negative: int
@@ -58,157 +42,134 @@ class ConfusionMatrix:
     threshold: float
 
     def to_dict(self) -> dict[str, float]:
-        """Flat dict representation, e.g. for logging or JSON output."""
         return asdict(self)
 
 
-class FraudRiskModel(Protocol):
-    """Structural type both `HealthFraudModel` and `MotorFraudModel` satisfy."""
+@dataclass(frozen=True)
+class ThresholdSelection:
+    threshold: float
+    objective: str
+    constraints: dict[str, float | int]
+    metrics: ClassificationMetrics
 
+    def to_dict(self) -> dict:
+        return {"threshold": self.threshold, "objective": self.objective,
+                "constraints": self.constraints, "metrics": self.metrics.to_dict()}
+
+
+class FraudRiskModel(Protocol):
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray: ...
 
 
-def _validate_and_derive_predictions(
-    y_true: Union[pd.Series, np.ndarray],
-    y_proba: Union[pd.Series, np.ndarray],
-    threshold: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Shared validation for `compute_classification_metrics`/`compute_confusion_matrix`.
-
-    Returns `(y_true_arr, y_proba_arr, y_pred)`.
-
-    Raises:
-        ValueError: if the inputs are empty, mismatched in length,
-            `threshold` is outside `[0, 1]`, `y_true` is not binary (0/1),
-            or `y_true` contains only one class.
-    """
-    y_true_arr = np.asarray(y_true)
-    y_proba_arr = np.asarray(y_proba, dtype=float)
-
-    if y_true_arr.shape[0] == 0:
-        raise ValueError("y_true has no samples")
-    if y_true_arr.shape[0] != y_proba_arr.shape[0]:
-        raise ValueError(
-            f"y_true has {y_true_arr.shape[0]} samples but y_proba has {y_proba_arr.shape[0]}"
-        )
-    if not 0.0 <= threshold <= 1.0:
+def _validate(y_true, y_proba, threshold=0.5):
+    y = np.asarray(y_true)
+    p = np.asarray(y_proba, dtype=float)
+    if y.ndim != 1 or p.ndim != 1 or not len(y):
+        raise ValueError("y_true and y_proba must be non-empty one-dimensional arrays")
+    if len(y) != len(p):
+        raise ValueError(f"y_true has {len(y)} samples but y_proba has {len(p)}")
+    if not np.isfinite(p).all() or ((p < 0) | (p > 1)).any():
+        raise ValueError("y_proba must contain finite probabilities in [0, 1]")
+    if not 0 <= threshold <= 1:
         raise ValueError(f"threshold must be in [0, 1], got {threshold}")
-
-    unique = set(np.unique(y_true_arr).tolist())
-    if not unique <= {0, 1}:
-        raise ValueError(f"y_true must be binary (0/1); got values {sorted(unique)}")
-    if len(unique) < 2:
-        raise ValueError(
-            "y_true must contain both classes (0 and 1) to compute these metrics; "
-            f"got only {sorted(unique)}"
-        )
-
-    y_pred = (y_proba_arr >= threshold).astype(int)
-    return y_true_arr, y_proba_arr, y_pred
+    if not set(np.unique(y).tolist()) <= {0, 1}:
+        raise ValueError("y_true must be binary (0/1)")
+    if len(np.unique(y)) < 2:
+        raise ValueError("y_true must contain both classes (0 and 1)")
+    return y.astype(int), p
 
 
-def compute_classification_metrics(
-    y_true: Union[pd.Series, np.ndarray],
-    y_proba: Union[pd.Series, np.ndarray],
-    threshold: float = 0.5,
-) -> ClassificationMetrics:
-    """Compute Accuracy/Precision/Recall/F1/ROC-AUC from labels and predicted probabilities.
-
-    The predicted label used for accuracy/precision/recall/F1 is derived
-    here as `y_proba >= threshold`, rather than taken from a model's own
-    `.predict()` — `HealthFraudModel.predict()` and
-    `MotorFraudModel.predict()` have different signatures (only the latter
-    accepts a `threshold`), so deriving labels from probabilities in one
-    place keeps the same threshold applied consistently across both models
-    and across every metric in a single call.
-
-    Args:
-        y_true: True binary (0/1) labels.
-        y_proba: Predicted positive-class probabilities, same length/order
-            as `y_true` (e.g. `model.predict_proba(X)`).
-        threshold: Probability cutoff for the positive class, in `[0, 1]`.
-
-    Raises:
-        ValueError: if the inputs are empty, mismatched in length,
-            `threshold` is outside `[0, 1]`, `y_true` is not binary (0/1),
-            or `y_true` contains only one class (ROC-AUC and
-            precision/recall are undefined in that case).
-    """
-    y_true_arr, y_proba_arr, y_pred = _validate_and_derive_predictions(y_true, y_proba, threshold)
-
+def compute_classification_metrics(y_true, y_proba, threshold=0.5) -> ClassificationMetrics:
+    y, p = _validate(y_true, y_proba, threshold)
+    pred = (p >= threshold).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y, pred, labels=[0, 1]).ravel()
+    volume = int(pred.sum())
     return ClassificationMetrics(
-        accuracy=float(accuracy_score(y_true_arr, y_pred)),
-        precision=float(precision_score(y_true_arr, y_pred, zero_division=0)),
-        recall=float(recall_score(y_true_arr, y_pred, zero_division=0)),
-        f1=float(f1_score(y_true_arr, y_pred, zero_division=0)),
-        roc_auc=float(roc_auc_score(y_true_arr, y_proba_arr)),
-        threshold=threshold,
-        n_samples=int(y_true_arr.shape[0]),
-        n_positive=int((y_true_arr == 1).sum()),
+        accuracy=float(accuracy_score(y, pred)),
+        precision=float(precision_score(y, pred, zero_division=0)),
+        recall=float(recall_score(y, pred, zero_division=0)),
+        f1=float(f1_score(y, pred, zero_division=0)),
+        roc_auc=float(roc_auc_score(y, p)), threshold=float(threshold),
+        n_samples=len(y), n_positive=int(y.sum()),
+        average_precision=float(average_precision_score(y, p)),
+        specificity=float(tn / (tn + fp)) if tn + fp else 0.0,
+        balanced_accuracy=float(balanced_accuracy_score(y, pred)),
+        review_volume=volume, review_rate=volume / len(y),
     )
 
 
-def compute_confusion_matrix(
-    y_true: Union[pd.Series, np.ndarray],
-    y_proba: Union[pd.Series, np.ndarray],
-    threshold: float = 0.5,
-) -> ConfusionMatrix:
-    """Compute a binary confusion matrix from labels and predicted probabilities.
+def compute_confusion_matrix(y_true, y_proba, threshold=0.5) -> ConfusionMatrix:
+    y, p = _validate(y_true, y_proba, threshold)
+    tn, fp, fn, tp = confusion_matrix(y, (p >= threshold).astype(int), labels=[0, 1]).ravel()
+    return ConfusionMatrix(int(tn), int(fp), int(fn), int(tp), float(threshold))
 
-    Uses the same `y_proba >= threshold` label derivation as
-    `compute_classification_metrics` (see its docstring), so a
-    `ConfusionMatrix` and a `ClassificationMetrics` computed with the same
-    `threshold` are always consistent with each other.
 
-    Args:
-        y_true: True binary (0/1) labels.
-        y_proba: Predicted positive-class probabilities, same length/order
-            as `y_true` (e.g. `model.predict_proba(X)`).
-        threshold: Probability cutoff for the positive class, in `[0, 1]`.
+def select_threshold(
+    y_true, y_proba, objective: Literal["max_f1", "recall_at_precision", "precision_at_recall", "review_capacity"] = "max_f1",
+    *, min_precision: float | None = None, min_recall: float | None = None,
+    review_capacity: int | None = None,
+) -> ThresholdSelection:
+    """Select a probability threshold from validation predictions only.
 
-    Raises:
-        ValueError: same conditions as `compute_classification_metrics`.
+    Ties are resolved toward the higher threshold (fewer reviews). For a
+    capacity objective, all claims at the cutoff probability are included.
     """
-    y_true_arr, _y_proba_arr, y_pred = _validate_and_derive_predictions(y_true, y_proba, threshold)
+    y, p = _validate(y_true, y_proba, 0.5)
+    if objective not in {"max_f1", "recall_at_precision", "precision_at_recall", "review_capacity"}:
+        raise ValueError(f"unsupported threshold objective: {objective}")
+    if objective == "recall_at_precision" and min_precision is None:
+        raise ValueError("min_precision is required for recall_at_precision")
+    if objective == "precision_at_recall" and min_recall is None:
+        raise ValueError("min_recall is required for precision_at_recall")
+    if min_precision is not None and not 0 <= min_precision <= 1:
+        raise ValueError("min_precision must be in [0, 1]")
+    if min_recall is not None and not 0 <= min_recall <= 1:
+        raise ValueError("min_recall must be in [0, 1]")
+    if objective == "review_capacity" and (review_capacity is None or not 0 <= review_capacity <= len(y)):
+        raise ValueError(f"review_capacity must be between 0 and {len(y)}")
 
-    tn, fp, fn, tp = confusion_matrix(y_true_arr, y_pred, labels=[0, 1]).ravel()
+    thresholds = np.unique(np.r_[p, 0.0, 1.0])
+    candidates = [(float(t), compute_classification_metrics(y, p, float(t))) for t in thresholds]
+    if objective == "max_f1":
+        selected = max(candidates, key=lambda x: (x[1].f1, x[0]))
+    elif objective == "recall_at_precision":
+        feasible = [x for x in candidates if x[1].precision >= min_precision]
+        if not feasible:
+            raise ValueError(f"infeasible threshold constraint: precision >= {min_precision}")
+        selected = max(feasible, key=lambda x: (x[1].recall, x[1].precision, x[0]))
+    elif objective == "precision_at_recall":
+        feasible = [x for x in candidates if x[1].recall >= min_recall]
+        if not feasible:
+            raise ValueError(f"infeasible threshold constraint: recall >= {min_recall}")
+        selected = max(feasible, key=lambda x: (x[1].precision, x[1].recall, x[0]))
+    else:
+        feasible = [x for x in candidates if x[1].review_volume <= review_capacity]
+        if not feasible:
+            raise ValueError(
+                f"infeasible threshold constraint: review_capacity={review_capacity}; "
+                "tied probabilities prevent meeting the requested capacity"
+            )
+        selected = max(feasible, key=lambda x: (x[1].recall, x[1].precision, x[0]))
+    constraints: dict[str, float | int] = {}
+    if min_precision is not None: constraints["min_precision"] = min_precision
+    if min_recall is not None: constraints["min_recall"] = min_recall
+    if review_capacity is not None: constraints["review_capacity"] = review_capacity
+    return ThresholdSelection(selected[0], objective, constraints, selected[1])
 
-    return ConfusionMatrix(
-        true_negative=int(tn),
-        false_positive=int(fp),
-        false_negative=int(fn),
-        true_positive=int(tp),
-        threshold=threshold,
+
+def curve_data(y_true, y_proba) -> tuple[dict, dict]:
+    y, p = _validate(y_true, y_proba, 0.5)
+    fpr, tpr, roc_thresholds = roc_curve(y, p)
+    precision, recall, pr_thresholds = precision_recall_curve(y, p)
+    return (
+        {"fpr": fpr.tolist(), "tpr": tpr.tolist(), "thresholds": roc_thresholds.tolist()},
+        {"precision": precision.tolist(), "recall": recall.tolist(), "thresholds": pr_thresholds.tolist()},
     )
 
 
-def evaluate_model(
-    model: FraudRiskModel,
-    X: pd.DataFrame,
-    y_true: Union[pd.Series, np.ndarray],
-    threshold: float = 0.5,
-) -> ClassificationMetrics:
-    """Score a fitted `HealthFraudModel` or `MotorFraudModel` on `(X, y_true)`.
-
-    Calls `model.predict_proba(X)` and scores the result with
-    `compute_classification_metrics`. `X`/`y_true` should be a val or test
-    split — never the data the model was fit on.
-    """
-    y_proba = model.predict_proba(X)
-    return compute_classification_metrics(y_true, y_proba, threshold=threshold)
+def evaluate_model(model: FraudRiskModel, X: pd.DataFrame, y_true, threshold=0.5) -> ClassificationMetrics:
+    return compute_classification_metrics(y_true, model.predict_proba(X), threshold)
 
 
-def evaluate_confusion_matrix(
-    model: FraudRiskModel,
-    X: pd.DataFrame,
-    y_true: Union[pd.Series, np.ndarray],
-    threshold: float = 0.5,
-) -> ConfusionMatrix:
-    """Score a fitted `HealthFraudModel` or `MotorFraudModel` on `(X, y_true)`.
-
-    Calls `model.predict_proba(X)` and scores the result with
-    `compute_confusion_matrix`. `X`/`y_true` should be a val or test split —
-    never the data the model was fit on.
-    """
-    y_proba = model.predict_proba(X)
-    return compute_confusion_matrix(y_true, y_proba, threshold=threshold)
+def evaluate_confusion_matrix(model: FraudRiskModel, X: pd.DataFrame, y_true, threshold=0.5) -> ConfusionMatrix:
+    return compute_confusion_matrix(y_true, model.predict_proba(X), threshold)

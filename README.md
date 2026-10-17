@@ -158,30 +158,24 @@ model.
 
 ## Model performance
 
-The `models/health`/`models/motor` artifacts shipped for the demo are
-trained at the defaults above (full motor dataset; 28,000-claim health
-sample), promoted from a larger offline training experiment documented in
-full in [`docs/model_training_experiment.md`](docs/model_training_experiment.md) — including the smaller-sample
-numbers they replaced and why more data helped. Metrics are on each
-domain's own held-out validation split, threshold 0.5:
+The previously listed motor ROC-AUC 0.724 and health ROC-AUC 0.883 are
+historical supplied validation baselines, not current performance claims.
+Those artifacts used graph features built before splitting and a fixed 0.50
+threshold. The current training script creates row/provider-disjoint train,
+validation, and test partitions, selects model settings and an operating
+threshold from validation only, and writes untouched test results to
+`models/{motor,health}/test_metrics.json`. Validation metrics, threshold
+selection, curve data, and model comparisons are saved in separate sidecars.
+Generated model artifacts are gitignored; rerun the training command above
+to reproduce them.
 
-| Metric | Motor (n=15,420) | Health (n=28,000) |
-|---|---|---|
-| Accuracy | 0.881 | 0.795 |
-| Precision | 0.113 | 0.770 |
-| Recall | 0.144 | 0.759 |
-| F1 | 0.127 | 0.765 |
-| ROC-AUC | 0.724 | 0.883 |
-| Validation claims | 2,313 (139 positive) | 4,160 (1,824 positive) |
-
-Motor's precision/recall stay low at the default 0.5 threshold — this
-reflects a genuinely weak fraud signal in the available motor claim features
-(5.99% base fraud rate), not a training-size artifact; ROC-AUC is the more
-informative number for this domain. Health's claim-level label is a
-provider-level approximation (`claim_fraud_label_provider_derived`, see
-[Limitations](#limitations)), so its stronger numbers should be read as "the
-model separates the two classes well," not as ground-truth claim-level
-accuracy.
+Motor training compares structured features with structured plus split-local
+graph features generated from synthetic garage/account links. These links are
+not observed insurance data, so validation average precision selects the
+representation. Health `PotentialFraud` is a provider-derived proxy inherited
+by claims, not verified claim-level fraud. Claim prevalence is weighted by
+provider claim volume and should not be compared directly with provider-level
+prevalence.
 
 ## Running the Streamlit app
 
