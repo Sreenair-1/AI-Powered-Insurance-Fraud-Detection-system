@@ -59,16 +59,16 @@ data/raw/{motor,health,demographics}      src/data/
 
 | Path | Responsibility | Docs |
 | --- | --- | --- |
-| `src/data/` | Dataset loading, schema validation, preprocessing, leakage-safe train/val/test splits, synthetic entity/fraud-ring augmentation | `docs/data_contract.md`, `docs/synthetic_augmentation.md` |
-| `src/forensics/` | Error Level Analysis, copy-move (ORB keypoint) detection, EXIF & PDF metadata analysis on claim document images and PDFs | `docs/forensics_ela.md`, `docs/forensics_copy_move.md`, `docs/forensics_metadata.md`, `docs/forensics_pdf.md` |
-| `src/graph/` | Builds a `networkx` entity graph per claim (policyholder/provider/physician/garage/bank account) and derives centrality, community, and shared-entity "fraud-ring" features | `docs/graph.md` |
-| `src/features/` | Fuses structured + graph + forensic signals into one `claim_key`-indexed feature matrix, `claim_key`-aligned so no source silently drops rows | `docs/feature_fusion.md`, `docs/feature_forensics.md` |
-| `src/models/` | `HealthFraudModel`/`MotorFraudModel` (XGBoost), shared evaluation metrics, JSON-based model persistence (no `pickle`) | `docs/model_health.md`, `docs/model_motor.md`, `docs/model_evaluation.md`, `docs/model_persistence.md`, `docs/model_evaluation_report.md` |
-| `src/explainability/` | SHAP `TreeExplainer`-based global/local explanations, per domain plus a shared model-agnostic layer | `docs/shap.md`, `docs/shap_health.md`, `docs/shap_motor.md` |
-| `src/pipeline/` | Wires fusion + model + evaluation + SHAP into one per-claim risk assessment call | `docs/pipeline.md` |
-| `app/` | InsureSight AI Streamlit investigator UI: overview KPIs, claims workspace, document forensics, and model insights | `docs/app_ui.md` |
-| `scripts/train_models.py` | Offline training entry point that produces the model artifacts `app/` loads | `docs/app_ui.md` |
-| `tests/` | Unit + integration tests | `docs/running.md` |
+| `src/data/` | Dataset loading, schema validation, preprocessing, leakage-safe train/val/test splits, synthetic entity/fraud-ring augmentation | [`docs/data_contract.md`](docs/data_contract.md), [`docs/synthetic_augmentation.md`](docs/synthetic_augmentation.md) |
+| `src/forensics/` | Error Level Analysis, copy-move (ORB keypoint) detection, EXIF & PDF metadata analysis on claim document images and PDFs | [`docs/forensics_ela.md`](docs/forensics_ela.md), [`docs/forensics_copy_move.md`](docs/forensics_copy_move.md), [`docs/forensics_metadata.md`](docs/forensics_metadata.md), [`docs/forensics_pdf.md`](docs/forensics_pdf.md) |
+| `src/graph/` | Builds a `networkx` entity graph per claim (policyholder/provider/physician/garage/bank account) and derives centrality, community, and shared-entity "fraud-ring" features | [`docs/graph.md`](docs/graph.md) |
+| `src/features/` | Fuses structured + graph + forensic signals into one `claim_key`-indexed feature matrix, `claim_key`-aligned so no source silently drops rows | [`docs/feature_fusion.md`](docs/feature_fusion.md), [`docs/feature_forensics.md`](docs/feature_forensics.md) |
+| `src/models/` | `HealthFraudModel`/`MotorFraudModel` (XGBoost), shared evaluation metrics, JSON-based model persistence (no `pickle`) | [`docs/model_health.md`](docs/model_health.md), [`docs/model_motor.md`](docs/model_motor.md), [`docs/model_evaluation.md`](docs/model_evaluation.md), [`docs/model_persistence.md`](docs/model_persistence.md), [`docs/model_evaluation_report.md`](docs/model_evaluation_report.md) |
+| `src/explainability/` | SHAP `TreeExplainer`-based global/local explanations, per domain plus a shared model-agnostic layer | [`docs/shap.md`](docs/shap.md), [`docs/shap_health.md`](docs/shap_health.md), [`docs/shap_motor.md`](docs/shap_motor.md) |
+| `src/pipeline/` | Wires fusion + model + evaluation + SHAP into one per-claim risk assessment call | [`docs/pipeline.md`](docs/pipeline.md) |
+| `app/` | InsureSight AI Streamlit investigator UI: overview KPIs, claims workspace, document forensics, and model insights | [`docs/app_ui.md`](docs/app_ui.md) |
+| `scripts/train_models.py` | Offline training entry point that produces the model artifacts `app/` loads | [`docs/app_ui.md`](docs/app_ui.md) |
+| `tests/` | Unit + integration tests | [`docs/running.md`](docs/running.md) |
 
 ## Datasets and synthetic data
 
@@ -78,7 +78,7 @@ data/raw/{motor,health,demographics}      src/data/
 | Health | `rohitrox/healthcare-provider-fraud-detection-analysis` | CC0 | `PotentialFraud` — real, but **provider-level**, not claim-level (see below) |
 | Demographics reference | `patelparth3399/indian-insurance-premium-prediction-dataset` | CC0 | none (used only to sample Indian-context demographic attributes) |
 
-Full schema/column-level detail: `docs/data_contract.md`.
+Full schema/column-level detail: [`docs/data_contract.md`](docs/data_contract.md).
 
 Two known, deliberate approximations, both documented in code and never
 presented as ground truth:
@@ -95,7 +95,7 @@ presented as ground truth:
   "fraud rings" (claims sharing a garage/bank account) so the graph-analytics
   stage has something to detect and can be validated against a known ground
   truth (`synthetic_fraud_ring_label`) — kept strictly separate from the real
-  `FraudFound_P` label at every stage. See `docs/synthetic_augmentation.md`.
+  `FraudFound_P` label at every stage. See [`docs/synthetic_augmentation.md`](docs/synthetic_augmentation.md).
 
 No claim-level document → image mapping exists in any source dataset, so
 forensic features default to an "unavailable" placeholder for the bulk
@@ -114,7 +114,7 @@ Use `./.venv/Scripts/python.exe` for every command below (not a bare
 `python`) so you're running against the project's own virtual environment.
 
 Place the raw Kaggle CSVs under `data/raw/{motor,health,demographics}/` per
-the file mapping in `docs/data_contract.md` §2 — `data/` is gitignored
+the file mapping in [`docs/data_contract.md`](docs/data_contract.md) §2 — `data/` is gitignored
 (generated/local-only, not committed), and every loader in `src/data/`
 raises an actionable `DatasetFileMissingError` naming the exact expected
 path if a file isn't there.
@@ -132,7 +132,7 @@ This samples the raw data — by default the **full 15,420-claim motor
 dataset** and a **28,000-claim health sample** (8,000 inpatient + 20,000
 outpatient, out of ~558K available); see [Model performance](#model-performance)
 for why these are the recommended defaults and
-`docs/model_training_experiment.md` for the experiment that established
+[`docs/model_training_experiment.md`](docs/model_training_experiment.md) for the experiment that established
 them. Both domains together train in well under two minutes on ordinary
 hardware. The script builds the fused feature matrix (forensics-unavailable
 + graph + structured features), does a leakage-safe train/validation split
@@ -161,7 +161,7 @@ model.
 The `models/health`/`models/motor` artifacts shipped for the demo are
 trained at the defaults above (full motor dataset; 28,000-claim health
 sample), promoted from a larger offline training experiment documented in
-full in `docs/model_training_experiment.md` — including the smaller-sample
+full in [`docs/model_training_experiment.md`](docs/model_training_experiment.md) — including the smaller-sample
 numbers they replaced and why more data helped. Metrics are on each
 domain's own held-out validation split, threshold 0.5:
 
@@ -220,7 +220,7 @@ if either is absent.
 ./.venv/Scripts/python.exe -m pytest tests/ -q
 ```
 
-Per-module test commands and a requirements breakdown: `docs/running.md`.
+Per-module test commands and a requirements breakdown: [`docs/running.md`](docs/running.md).
 CI (`.github/workflows/ci.yml`) runs the full suite on every push/PR against
 synthetic in-memory fixtures only — it does not require `data/raw/`.
 
@@ -244,10 +244,10 @@ synthetic in-memory fixtures only — it does not require `data/raw/`.
   now use the full motor dataset and a 28,000-claim health sample (see
   [Model performance](#model-performance)), since `src/graph/features.py`'s
   centrality now auto-switches to an approximate/cached computation above
-  1,500 graph nodes (see `docs/graph.md`) and both domains train in well
+  1,500 graph nodes (see [`docs/graph.md`](docs/graph.md)) and both domains train in well
   under two minutes combined. The app's own sample-size defaults were left
   unchanged regardless — interactive responsiveness, not centrality cost, is
-  what motivates that bound. See `docs/app_ui.md`.
+  what motivates that bound. See [`docs/app_ui.md`](docs/app_ui.md).
 - **Graph signals are evidence, not verdicts** — a claim is never labeled
   fraudulent solely for having high centrality or a shared entity; these are
   model input features, weighed by XGBoost alongside everything else.
@@ -264,4 +264,4 @@ analytics → feature fusion → XGBoost models → evaluation → SHAP
 explainability → inference pipeline → model persistence → Streamlit UI, with
 real trained artifacts producible via `scripts/train_models.py`. The final evaluation
 report (motor/health metrics, confusion matrices, ROC-AUC/F1 comparison,
-findings, and limitations) is `docs/model_evaluation_report.md`.
+findings, and limitations) is [`docs/model_evaluation_report.md`](docs/model_evaluation_report.md).

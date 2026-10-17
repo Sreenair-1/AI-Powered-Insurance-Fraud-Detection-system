@@ -20,10 +20,12 @@ from app.ui_theme import (
     SLATE_MUTED,
     SLATE_TEXT,
     TEAL_ACCENT,
+    delta_badge,
     info_callout,
     kpi_card,
     risk_badge,
     status_badge,
+    triage_banner,
 )
 from src.features.structured import CLAIM_KEY_COL
 from src.pipeline.inference import DEFAULT_RISK_THRESHOLDS, RISK_CATEGORY_DESCRIPTIONS
@@ -41,10 +43,24 @@ except ImportError:  # pragma: no cover
 
 def render_kpi_row(items: list[tuple[str, str, str, Optional[str]]]) -> None:
     """Render a responsive horizontal row of enterprise KPI cards."""
-    cols = st.columns(len(items))
-    for col, (label, value, hint, accent) in zip(cols, items):
-        with col:
-            kpi_card(label, value, hint, accent)
+    if len(items) <= 4:
+        cols = st.columns(len(items))
+        for col, (label, value, hint, accent) in zip(cols, items):
+            with col:
+                kpi_card(label, value, hint, accent)
+    else:
+        # Avoid overcrowded 5+ column layouts on laptop screens
+        first_row = items[:4]
+        second_row = items[4:]
+        cols1 = st.columns(len(first_row))
+        for col, (label, value, hint, accent) in zip(cols1, first_row):
+            with col:
+                kpi_card(label, value, hint, accent)
+        if second_row:
+            cols2 = st.columns(max(len(second_row), 3))
+            for col, (label, value, hint, accent) in zip(cols2[:len(second_row)], second_row):
+                with col:
+                    kpi_card(label, value, hint, accent)
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +294,7 @@ def feature_importance_chart(model: Any, top_n: int = 8) -> None:
 # ---------------------------------------------------------------------------
 
 
-def shap_chart(top_factors: list[dict[str, Any]]) -> None:
+def shap_chart(top_factors: list[dict[str, Any]], base_value: Optional[float] = None) -> None:
     """Render an enterprise horizontal diverging bar chart for SHAP factor contributions."""
     if not top_factors:
         st.info("No claim-specific SHAP factors are available for this assessment.")
@@ -294,53 +310,74 @@ def shap_chart(top_factors: list[dict[str, Any]]) -> None:
     ]
     df = pd.DataFrame(rows)
 
-    # Tabular presentation
+    if base_value is not None:
+        st.markdown(
+            f'<div style="font-size:0.82rem;color:#475569;margin-bottom:0.6rem;">'
+            f'<b>Baseline Model Margin:</b> <code>{base_value:+.3f}</code> log-odds '
+            f'<span style="color:#64748B;">(Expected prediction prior before claim-specific feature adjustments)</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    if alt is not None:
+        chart_df = df.copy()
+        chart_df["abs_impact"] = chart_df["shap_value"].abs()
+        chart_df = chart_df.sort_values("shap_value")
+        chart_df["direction"] = chart_df["shap_value"].map(
+            lambda v: "Increases risk (+)" if v >= 0 else "Decreases risk (-)"
+        )
+
+        chart = (
+            alt.Chart(chart_df)
+            .mark_bar(cornerRadius=4)
+            .encode(
+                x=alt.X(
+                    "shap_value:Q",
+                    title="SHAP Contribution to Prediction Margin (Log-Odds Impact)",
+                    axis=alt.Axis(grid=True),
+                ),
+                y=alt.Y(
+                    "feature:N",
+                    sort=None,
+                    title=None,
+                    axis=alt.Axis(labelLimit=250, labelFontWeight="bold"),
+                ),
+                color=alt.Color(
+                    "direction:N",
+                    scale=alt.Scale(
+                        domain=["Increases risk (+)", "Decreases risk (-)"],
+                        range=[RISK_COLORS["high"], RISK_COLORS["low"]],
+                    ),
+                    legend=alt.Legend(title="Factor Impact", orient="top"),
+                ),
+                tooltip=[
+                    alt.Tooltip("feature:N", title="Feature Factor"),
+                    alt.Tooltip("feature_value:N", title="Observed Claim Value"),
+                    alt.Tooltip("shap_value:Q", title="SHAP Impact (Log-Odds)", format="+.4f"),
+                    alt.Tooltip("direction:N", title="Direction"),
+                ],
+            )
+            .properties(height=max(200, 28 * len(chart_df)))
+        )
+        st.altair_chart(chart, width="stretch")
+
+    # Tabular presentation in an expander for clean readability
     display = df.copy()
     display["Direction"] = display["shap_value"].map(
         lambda v: "Increases risk (+)" if v >= 0 else "Decreases risk (-)"
     )
     display["SHAP impact"] = display["shap_value"].map(lambda v: f"{v:+.3f}")
     display = display.rename(columns={"feature": "Feature Factor", "feature_value": "Claim Value"})
-    st.dataframe(
-        display[["Feature Factor", "Claim Value", "SHAP impact", "Direction"]],
-        hide_index=True,
-        width="stretch",
-    )
-
-    if alt is None:
-        return
-
-    chart_df = df.sort_values("shap_value")
-    chart_df["direction"] = chart_df["shap_value"].map(
-        lambda v: "Increases risk" if v >= 0 else "Decreases risk"
-    )
-
-    chart = (
-        alt.Chart(chart_df)
-        .mark_bar(cornerRadius=3)
-        .encode(
-            x=alt.X("shap_value:Q", title="SHAP Contribution to Prediction Margin (Log-Odds)"),
-            y=alt.Y("feature:N", sort=None, title=None),
-            color=alt.Color(
-                "direction:N",
-                scale=alt.Scale(
-                    domain=["Increases risk", "Decreases risk"],
-                    range=[RISK_COLORS["high"], RISK_COLORS["low"]],
-                ),
-                legend=alt.Legend(title="Factor Impact", orient="top"),
-            ),
-            tooltip=[
-                alt.Tooltip("feature:N", title="Feature"),
-                alt.Tooltip("feature_value:N", title="Value"),
-                alt.Tooltip("shap_value:Q", title="SHAP Value", format="+.4f"),
-            ],
+    with st.expander("Detailed SHAP Factor Contribution Breakdown", expanded=False):
+        st.dataframe(
+            display[["Feature Factor", "Claim Value", "SHAP impact", "Direction"]],
+            hide_index=True,
+            width="stretch",
         )
-        .properties(height=max(190, 28 * len(chart_df)))
-    )
-    st.altair_chart(chart, width="stretch")
+
     st.caption(
-        "Positive SHAP values push the model toward higher fraud risk; negative "
-        "values push it lower. This explains this model's prediction mechanics, not a legal finding of fraud."
+        "Positive SHAP values (red) push model inference toward elevated fraud risk; negative values (green) "
+        "push toward legitimate claim status. This explains this model's prediction mechanics, not a legal finding of fraud."
     )
 
 
@@ -354,6 +391,7 @@ def render_assessment(assessment: Any, *, heading: str = "Risk assessment") -> N
     summary = assessment.to_ui_summary()
     category = str(summary.get("risk_category", "")).lower()
     probability = float(summary.get("fraud_probability", 0.0))
+    base_val = summary.get("base_value")
 
     cat_color = RISK_COLORS.get(category, NAVY_PRIMARY)
     interpretation = {
@@ -401,7 +439,7 @@ def render_assessment(assessment: Any, *, heading: str = "Risk assessment") -> N
     )
 
     st.markdown("##### Explainable AI (SHAP Factor Contributions)")
-    shap_chart(list(summary.get("top_factors") or []))
+    shap_chart(list(summary.get("top_factors") or []), base_value=base_val)
 
 
 def grouped_attribute_cards(row: pd.Series, groups: dict[str, tuple[str, ...]]) -> None:
@@ -434,14 +472,30 @@ def grouped_attribute_cards(row: pd.Series, groups: dict[str, tuple[str, ...]]) 
 
 
 def render_graph_signals(fused_row: pd.Series) -> None:
-    """Render graph relationship indicators and entity network signals."""
-    st.markdown("##### Graph Relationship Signals")
-    cols = st.columns(4)
+    """Render graph relationship indicators and entity network signals with clear differentiation."""
+    st.markdown("##### Graph Relationship & Network Evidence")
     shared = bool(fused_row.get("has_shared_entity")) if "has_shared_entity" in fused_row.index else False
     max_deg = int(fused_row.get("max_entity_claim_degree", 0) or 0)
     comm_id = int(fused_row.get("community_id", -1) if pd.notna(fused_row.get("community_id", -1)) else -1)
     centrality = float(fused_row.get("degree_centrality", 0.0) or 0.0)
 
+    status_text = "Shared Entities Flagged (Linkage Detected)" if shared else "Independent (No Collusion Linkage)"
+    status_var = "warning" if shared else "neutral"
+
+    st.markdown(
+        f'<div class="is-card" style="border-left: 4px solid {RISK_COLORS["medium"] if shared else TEAL_ACCENT};margin-bottom:0.8rem;">'
+        f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+        f'<div>'
+        f'<div style="font-weight:700;font-size:0.95rem;color:#0B192C;">Network Linkage Analysis</div>'
+        f'<div style="font-size:0.78rem;color:#64748B;">NetworkX bipartite graph tracking connections across garages, bank accounts, providers, and physicians.</div>'
+        f'</div>'
+        f'<div>{status_badge(status_text, status_var)}</div>'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    cols = st.columns(4)
     cols[0].metric("Shared Entities", "Yes (Detected)" if shared else "No")
     cols[1].metric("Max Entity Claim Degree", max_deg)
     cols[2].metric("Community ID", comm_id if comm_id != -1 else "None")
@@ -575,14 +629,51 @@ def render_forensic_panels(forensic: ForensicUploadResult, is_pdf: bool) -> None
 
 
 def render_preview(preview_image: Optional[Image.Image], extracted_text: str, caption: str) -> None:
-    """Render an expandable preview of the document with extracted text."""
+    """Render an expansive, high-resolution preview of the document with extracted text."""
     with st.expander("Document visual preview & OCR text", expanded=True):
         if preview_image is not None:
             st.image(preview_image, caption=caption, width="stretch")
         if extracted_text.strip():
-            st.text_area("Extracted Document Text", extracted_text, height=130, disabled=True)
+            st.text_area("Extracted Document Text", extracted_text, height=140, disabled=True)
         elif preview_image is None:
-            st.info("No preview is available for this file.")
+            st.info("No visual preview is available for this file format.")
+
+
+def render_forensic_comparison(original: Any, rescored: Any) -> None:
+    """Render an explicit, polished original-versus-updated risk comparison card."""
+    orig_sum = original.to_ui_summary()
+    resc_sum = rescored.to_ui_summary()
+
+    orig_prob = float(orig_sum.get("fraud_probability", 0.0))
+    resc_prob = float(resc_sum.get("fraud_probability", 0.0))
+    orig_cat = str(orig_sum.get("risk_category", "low")).lower()
+    resc_cat = str(resc_sum.get("risk_category", "low")).lower()
+    delta = resc_prob - orig_prob
+
+    delta_html = delta_badge(delta)
+    if delta > 0.05:
+        delta_note = "Elevated fraud probability due to forensic tampering indicators."
+    elif delta < -0.05:
+        delta_note = "Decreased risk profile following forensic verification."
+    else:
+        delta_note = "Risk assessment unchanged by document examination."
+
+    st.markdown(
+        f'<div class="is-card" style="margin-bottom:1rem;">'
+        f'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.4rem;">'
+        f'<div style="font-weight:700;font-size:1.05rem;color:#0B192C;">Original vs. Updated Risk Assessment Comparison</div>'
+        f'<div>{delta_html}</div>'
+        f'</div>'
+        f'<div style="font-size:0.8rem;color:#64748B;">{html.escape(delta_note)}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    before, after = st.columns(2)
+    with before:
+        render_assessment(original, heading="Original Model Assessment (Tabular + Graph)")
+    with after:
+        render_assessment(rescored, heading="Updated Assessment (With Forensic Evidence)")
 
 
 # ---------------------------------------------------------------------------
@@ -602,27 +693,157 @@ def claims_to_review_table(table: pd.DataFrame, limit: int = 15) -> pd.DataFrame
 
 
 def render_confusion_matrix_card(confusion: dict[str, Any]) -> None:
-    """Render a clean, formatted confusion matrix table with metrics."""
-    tn = confusion.get("true_negative", 0)
-    fp = confusion.get("false_positive", 0)
-    fn = confusion.get("false_negative", 0)
-    tp = confusion.get("true_positive", 0)
+    """Render a clean, heatmap-style confusion matrix table with metrics."""
+    tn = int(confusion.get("true_negative", 0))
+    fp = int(confusion.get("false_positive", 0))
+    fn = int(confusion.get("false_negative", 0))
+    tp = int(confusion.get("true_positive", 0))
     total = tn + fp + fn + tp
 
-    cm_df = pd.DataFrame(
-        [
-            [f"{tn:,}", f"{fp:,}", f"{(tn + fp):,}"],
-            [f"{fn:,}", f"{tp:,}", f"{(fn + tp):,}"],
-            [f"{(tn + fn):,}", f"{(fp + tp):,}", f"{total:,}"],
-        ],
-        index=["Actual Legitimate (0)", "Actual Fraud / Elevated (1)", "Total Predicted"],
-        columns=["Predicted Legitimate (0)", "Predicted Fraud (1)", "Total Actual"],
-    )
-    st.dataframe(cm_df, width="stretch")
+    actual_neg = tn + fp
+    actual_pos = fn + tp
+    pred_neg = tn + fn
+    pred_pos = fp + tp
 
-    c1, c2, c3 = st.columns(3)
-    spec = tn / (tn + fp) if (tn + fp) > 0 else 0.0
-    sens = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    c1.metric("Specificity (True Neg Rate)", f"{spec:.1%}")
-    c2.metric("Sensitivity / Recall (True Pos)", f"{sens:.1%}")
-    c3.metric("Decision Threshold", f"{confusion.get('threshold', 0.5):.2f}")
+    tn_pct = (tn / actual_neg * 100.0) if actual_neg > 0 else 0.0
+    fp_pct = (fp / actual_neg * 100.0) if actual_neg > 0 else 0.0
+    fn_pct = (fn / actual_pos * 100.0) if actual_pos > 0 else 0.0
+    tp_pct = (tp / actual_pos * 100.0) if actual_pos > 0 else 0.0
+
+    st.markdown(
+        f'<div class="is-cm-container">'
+        f'<div style="font-weight:700;font-size:0.95rem;color:#0B192C;margin-bottom:0.25rem;">Heatmap-Style Confusion Matrix (Held-out Validation Split)</div>'
+        f'<div style="font-size:0.78rem;color:#64748B;margin-bottom:0.8rem;">Evaluated at decision threshold {confusion.get("threshold", 0.5):.2f}. Shading highlights classification performance.</div>'
+        f'<div class="is-cm-grid">'
+        f'<div class="is-cm-header-cell"></div>'
+        f'<div class="is-cm-header-cell">Predicted Legitimate (0)</div>'
+        f'<div class="is-cm-header-cell">Predicted Fraud (1)</div>'
+        f'<div class="is-cm-header-cell">Actual Total</div>'
+        f'<div class="is-cm-row-label"><div>Actual Legitimate (0)</div><span class="is-cm-row-sub">Negative Class</span></div>'
+        f'<div class="is-cm-tile is-cm-tile-tn"><div class="is-cm-tile-val">{tn:,}</div><div class="is-cm-tile-sub">True Neg ({tn_pct:.1f}%)</div></div>'
+        f'<div class="is-cm-tile is-cm-tile-fp"><div class="is-cm-tile-val">{fp:,}</div><div class="is-cm-tile-sub">False Pos ({fp_pct:.1f}%)</div></div>'
+        f'<div class="is-cm-total-cell">{actual_neg:,}</div>'
+        f'<div class="is-cm-row-label"><div>Actual Fraud (1)</div><span class="is-cm-row-sub">Positive Class</span></div>'
+        f'<div class="is-cm-tile is-cm-tile-fn"><div class="is-cm-tile-val">{fn:,}</div><div class="is-cm-tile-sub">False Neg ({fn_pct:.1f}%)</div></div>'
+        f'<div class="is-cm-tile is-cm-tile-tp"><div class="is-cm-tile-val">{tp:,}</div><div class="is-cm-tile-sub">True Pos ({tp_pct:.1f}%)</div></div>'
+        f'<div class="is-cm-total-cell">{actual_pos:,}</div>'
+        f'<div class="is-cm-header-cell" style="justify-content:flex-start;padding-left:0.5rem;">Predicted Total</div>'
+        f'<div class="is-cm-total-cell">{pred_neg:,}</div>'
+        f'<div class="is-cm-total-cell">{pred_pos:,}</div>'
+        f'<div class="is-cm-total-cell" style="background:#E2E8F0;font-weight:800;">{total:,}</div>'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("Tabular View & Margin Totals", expanded=False):
+        cm_df = pd.DataFrame(
+            [
+                [f"{tn:,}", f"{fp:,}", f"{actual_neg:,}"],
+                [f"{fn:,}", f"{tp:,}", f"{actual_pos:,}"],
+                [f"{pred_neg:,}", f"{pred_pos:,}", f"{total:,}"],
+            ],
+            index=["Actual Legitimate (0)", "Actual Fraud / Elevated (1)", "Total Predicted"],
+            columns=["Predicted Legitimate (0)", "Predicted Fraud (1)", "Total Actual"],
+        )
+        st.dataframe(cm_df, width="stretch")
+
+    c1, c2, c3, c4 = st.columns(4)
+    spec = tn / actual_neg if actual_neg > 0 else 0.0
+    sens = tp / actual_pos if actual_pos > 0 else 0.0
+    prec = tp / pred_pos if pred_pos > 0 else 0.0
+    c1.metric("Specificity (True Neg Rate)", f"{spec:.1%}", help="True negative rate: proportion of legitimate claims correctly identified")
+    c2.metric("Sensitivity / Recall (True Pos)", f"{sens:.1%}", help="True positive rate: proportion of actual fraud claims flagged")
+    c3.metric("Precision (PPV)", f"{prec:.1%}", help="Positive predictive value: proportion of flagged claims that are actual fraud")
+    c4.metric("Decision Threshold", f"{confusion.get('threshold', 0.5):.2f}", help="Probability cutoff for classification")
+
+
+def render_evaluation_curves(
+    roc_data: Optional[dict[str, Any]] = None,
+    pr_data: Optional[dict[str, Any]] = None,
+    roc_auc: Optional[float] = None,
+) -> None:
+    """Render ROC or Precision-Recall curves only when the required underlying evaluation data exists."""
+    has_roc = (
+        roc_data is not None
+        and isinstance(roc_data.get("fpr"), list)
+        and isinstance(roc_data.get("tpr"), list)
+        and len(roc_data["fpr"]) > 1
+        and len(roc_data["tpr"]) > 1
+    )
+    has_pr = (
+        pr_data is not None
+        and isinstance(pr_data.get("precision"), list)
+        and isinstance(pr_data.get("recall"), list)
+        and len(pr_data["precision"]) > 1
+        and len(pr_data["recall"]) > 1
+    )
+
+    if not has_roc and not has_pr:
+        auc_str = f" (Validation ROC-AUC: {roc_auc:.3f})" if roc_auc is not None else ""
+        info_callout(
+            f"Point-by-point threshold curve points (ROC / Precision–Recall arrays) were not serialized "
+            f"with this model artifact directory{auc_str}. Primary summary ranking and classification metrics "
+            "are displayed above.",
+            title="Evaluation Threshold Curves",
+            variant="teal",
+        )
+        return
+
+    st.markdown("##### Model Evaluation Curves")
+    c_roc, c_pr = st.columns(2) if (has_roc and has_pr) else (st.container(), None)
+
+    if has_roc:
+        target_col = c_roc if has_pr else st
+        with target_col:
+            st.markdown("**Receiver Operating Characteristic (ROC) Curve**")
+            roc_df = pd.DataFrame({"False Positive Rate": roc_data["fpr"], "True Positive Rate": roc_data["tpr"]})
+            chance_df = pd.DataFrame({"False Positive Rate": [0.0, 1.0], "True Positive Rate": [0.0, 1.0]})
+
+            if alt is not None:
+                roc_line = (
+                    alt.Chart(roc_df)
+                    .mark_line(color=TEAL_ACCENT, strokeWidth=2.5)
+                    .encode(
+                        x=alt.X("False Positive Rate:Q", scale=alt.Scale(domain=[0.0, 1.0])),
+                        y=alt.Y("True Positive Rate:Q", scale=alt.Scale(domain=[0.0, 1.0])),
+                        tooltip=[
+                            alt.Tooltip("False Positive Rate:Q", format=".3f"),
+                            alt.Tooltip("True Positive Rate:Q", format=".3f"),
+                        ],
+                    )
+                )
+                chance_line = (
+                    alt.Chart(chance_df)
+                    .mark_line(color=SLATE_MUTED, strokeDash=[4, 4], strokeWidth=1.5)
+                    .encode(x="False Positive Rate:Q", y="True Positive Rate:Q")
+                )
+                chart = (roc_line + chance_line).properties(height=260)
+                st.altair_chart(chart, width="stretch")
+            else:
+                st.line_chart(roc_df.set_index("False Positive Rate"))
+            if roc_auc is not None:
+                st.caption(f"Area Under Curve (ROC-AUC): **{roc_auc:.3f}**")
+
+    if has_pr and c_pr is not None:
+        with c_pr:
+            st.markdown("**Precision–Recall Curve**")
+            pr_df = pd.DataFrame({"Recall": pr_data["recall"], "Precision": pr_data["precision"]})
+
+            if alt is not None:
+                pr_line = (
+                    alt.Chart(pr_df)
+                    .mark_line(color=NAVY_PRIMARY, strokeWidth=2.5)
+                    .encode(
+                        x=alt.X("Recall:Q", scale=alt.Scale(domain=[0.0, 1.0])),
+                        y=alt.Y("Precision:Q", scale=alt.Scale(domain=[0.0, 1.0])),
+                        tooltip=[
+                            alt.Tooltip("Recall:Q", format=".3f"),
+                            alt.Tooltip("Precision:Q", format=".3f"),
+                        ],
+                    )
+                ).properties(height=260)
+                st.altair_chart(pr_line, width="stretch")
+            else:
+                st.line_chart(pr_df.set_index("Recall"))
+            st.caption("Trade-off between detection precision and recall across decision cutoffs.")

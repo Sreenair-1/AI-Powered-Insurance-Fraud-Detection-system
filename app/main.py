@@ -42,6 +42,8 @@ from app.model_loader import (
     get_motor_model,
     load_confusion_matrix,
     load_eval_metrics,
+    load_pr_curve,
+    load_roc_curve,
 )
 from app.ui_components import (
     attribute_risk_chart,
@@ -52,6 +54,8 @@ from app.ui_components import (
     render_assessment,
     render_confusion_matrix_card,
     render_document_summary,
+    render_evaluation_curves,
+    render_forensic_comparison,
     render_forensic_panels,
     render_graph_signals,
     render_kpi_row,
@@ -60,6 +64,7 @@ from app.ui_components import (
 )
 from app.ui_theme import (
     RISK_COLORS,
+    delta_badge,
     info_callout,
     inject_theme,
     page_header,
@@ -68,6 +73,7 @@ from app.ui_theme import (
     sidebar_footer,
     sidebar_system_status,
     status_badge,
+    triage_banner,
 )
 from src.features.structured import CLAIM_KEY_COL
 from src.forensics import PDFLoadError, extract_pdf_text, get_pdf_info, render_pdf_page
@@ -249,13 +255,13 @@ def _render_overview(domain: str, model, table: pd.DataFrame) -> None:
 
     render_kpi_row(
         [
-            ("Loaded Sample", f"{n:,}", "Claims currently in memory", None),
-            ("High Risk", f"{high:,}", "Probability ≥ 70%", RISK_COLORS["high"]),
-            ("Medium Risk", f"{medium:,}", "Probability 30%–69%", RISK_COLORS["medium"]),
-            ("Low Risk", f"{low:,}", "Probability < 30%", RISK_COLORS["low"]),
-            ("Requires Review", f"{review:,}", "High + Medium risk claims", RISK_COLORS["medium"]),
+            ("Loaded Sample", f"{n:,}", "Claims analyzed in memory", None),
+            ("High Risk", f"{high:,}", f"{high / max(1, n):.1%} of sample · Priority 1", RISK_COLORS["high"]),
+            ("Medium Risk", f"{medium:,}", f"{medium / max(1, n):.1%} of sample · Priority 2", RISK_COLORS["medium"]),
+            ("Low Risk", f"{low:,}", f"{low / max(1, n):.1%} of sample · Straight-through", RISK_COLORS["low"]),
         ]
     )
+    triage_banner(review, n, high, medium)
 
     st.caption(
         "Risk cutoffs use decision-support thresholds: Low < 30%, Medium 30%–69%, High ≥ 70%. "
@@ -388,12 +394,19 @@ def _render_claim_detail(domain: str, model, dataset, claim_key: str) -> None:
 
     st.markdown(f"#### Case Investigation: `{claim_key}`")
     try:
+        matches = dataset.X[dataset.X[CLAIM_KEY_COL] == claim_key]
+        if matches.empty:
+            st.error(
+                f"Selected claim '{claim_key}' was not found in the currently loaded dataset sample. "
+                "It may have been excluded when dataset sampling parameters were modified."
+            )
+            return
         info = _claim_info(domain, dataset, claim_key)
-        fused = dataset.X[dataset.X[CLAIM_KEY_COL] == claim_key].iloc[0]
+        fused = matches.iloc[0]
         row = claim_row(dataset, claim_key)
         assessment = assess_claim(domain, model, row, DEFAULT_RISK_THRESHOLDS)
-    except (ClaimViewError, DatasetNotAvailableError) as exc:
-        st.error(str(exc))
+    except (ClaimViewError, DatasetNotAvailableError, KeyError, IndexError) as exc:
+        st.error(f"Unable to load claim details: {exc}")
         return
 
     # Section A: Claim Summary & Section B: Risk Assessment
@@ -448,9 +461,16 @@ def _render_attached_forensics(domain: str, model, dataset, claim_key: str, orig
     try:
         is_pdf, page_index, preview, text = _prepare_upload(uploaded, f"pdf_page_{claim_key}")
         forensic = run_forensic_checks(uploaded, page_index=page_index)
-    except (PDFLoadError, OSError, Exception) as exc:
-        st.error(f"Could not read the uploaded document: {exc}")
+    except PDFLoadError as exc:
+        st.error(f"Could not render or parse PDF document: {exc}")
         return
+    except OSError as exc:
+        st.error(f"Could not read the uploaded document file: {exc}")
+        return
+    except Exception as exc:
+        st.error(f"An unexpected error occurred while analyzing the document: {exc}")
+        return
+
     if not forensic.any_available:
         st.warning("Could not execute forensic checks on this file; features remain unavailable.")
         return
@@ -462,33 +482,24 @@ def _render_attached_forensics(domain: str, model, dataset, claim_key: str, orig
     try:
         rescored = rescore_with_forensics(domain, model, dataset, claim_key, forensic)
     except ClaimViewError as exc:
-        st.error(str(exc))
+        st.error(f"Could not re-score claim: {exc}")
         return
 
-    st.markdown("##### Integrated Risk Reassessment (Multimodal Fusion)")
-    p_orig = original.fraud_probability
-    p_new = rescored.fraud_probability
-    delta = p_new - p_orig
-
-    delta_label = f"{delta:+.1%}" if abs(delta) >= 0.001 else "No change"
-    st.caption(
-        f"Original model score: {p_orig:.1%}. Updated multimodal score: {p_new:.1%} (Impact: {delta_label}). "
-        "The updated assessment reflects fused tabular, graph, and forensic document evidence. "
-        "It serves as a decision-support adjustment, not a certified fraud finding."
-    )
-
-    before, after = st.columns(2)
-    with before:
-        render_assessment(original, heading="Original Model Assessment (Tabular + Graph)")
-    with after:
-        render_assessment(rescored, heading="Updated Assessment (With Forensic Evidence)")
+    render_forensic_comparison(original, rescored)
 
 
 def _render_claims(domain: str, model, dataset, table: pd.DataFrame) -> None:
     selected = st.session_state.get("selected_claim_key")
     if selected:
-        _render_claim_detail(domain, model, dataset, selected)
-        return
+        if selected not in dataset.X[CLAIM_KEY_COL].values:
+            st.session_state["selected_claim_key"] = None
+            st.warning(
+                f"Selected claim '{selected}' is no longer present in the active dataset sample "
+                "(the sample size or active domain was changed). Displaying full claims list."
+            )
+        else:
+            _render_claim_detail(domain, model, dataset, selected)
+            return
 
     page_header(
         "Claims investigation",
@@ -629,14 +640,39 @@ def _render_forensics_page(domain: str, model, dataset) -> None:
             key="new_claim_uploader",
         )
         if uploaded is None:
+            st.session_state.pop("new_claim_result", None)
+            st.session_state.pop("new_claim_doc_sig", None)
             st.info("Upload an invoice, hospital bill, repair receipt, or claim form to start a standalone triage.")
             return
 
         try:
             is_pdf, page_index, preview, text = _prepare_upload(uploaded, "new_claim_pdf_page")
-        except (PDFLoadError, OSError, Exception) as exc:
+        except PDFLoadError as exc:
+            st.session_state.pop("new_claim_result", None)
+            st.session_state.pop("new_claim_doc_sig", None)
+            st.error(f"Could not process PDF document: {exc}")
+            return
+        except OSError as exc:
+            st.session_state.pop("new_claim_result", None)
+            st.session_state.pop("new_claim_doc_sig", None)
             st.error(f"Could not read the uploaded document: {exc}")
             return
+        except Exception as exc:
+            st.session_state.pop("new_claim_result", None)
+            st.session_state.pop("new_claim_doc_sig", None)
+            st.error(f"An unexpected error occurred while loading the document: {exc}")
+            return
+
+        # Invalidate previous assessment if file or selected page changed
+        doc_sig = (
+            getattr(uploaded, "name", "document"),
+            getattr(uploaded, "size", None),
+            getattr(uploaded, "file_id", None),
+            page_index,
+            domain,
+        )
+        if st.session_state.get("new_claim_doc_sig") != doc_sig:
+            st.session_state.pop("new_claim_result", None)
 
         render_preview(preview, text, getattr(uploaded, "name", "document"))
 
@@ -658,6 +694,7 @@ def _render_forensics_page(domain: str, model, dataset) -> None:
                     overrides=overrides,
                 )
                 st.session_state["new_claim_result"] = result
+                st.session_state["new_claim_doc_sig"] = doc_sig
             except Exception as exc:
                 st.error(f"Assessment failed: {exc}")
                 return
@@ -719,6 +756,8 @@ def _render_insights(domain: str, active_model_dir: Path) -> None:
 
             metrics = load_eval_metrics(m_dir)
             confusion = load_confusion_matrix(m_dir)
+            roc_data = load_roc_curve(m_dir)
+            pr_data = load_pr_curve(m_dir)
 
             if metrics is None:
                 st.info(
@@ -726,23 +765,32 @@ def _render_insights(domain: str, active_model_dir: Path) -> None:
                     "Run `scripts/train_models.py` to regenerate eval_metrics.json."
                 )
             else:
-                m_cols = st.columns(5)
+                m_cols = st.columns(4)
                 m_cols[0].metric("ROC-AUC", f"{metrics['roc_auc']:.3f}", help="Ranking performance across all probability thresholds")
-                m_cols[1].metric("Accuracy", f"{metrics['accuracy']:.3f}")
+                m_cols[1].metric("Accuracy", f"{metrics['accuracy']:.3f}", help="Overall proportion of correct classifications")
                 m_cols[2].metric("Precision", f"{metrics['precision']:.3f}", help="Proportion of flagged claims that are positive")
                 m_cols[3].metric("Recall", f"{metrics['recall']:.3f}", help="Proportion of true positive claims detected")
-                m_cols[4].metric("F1-Score", f"{metrics['f1']:.3f}", help="Harmonic mean of precision and recall")
 
-                st.caption(
-                    f"Evaluated on {metrics.get('n_samples', '—'):,} validation claims "
-                    f"({metrics.get('n_positive', '—'):,} fraud cases, "
-                    f"{metrics.get('n_positive', 0) / max(1, metrics.get('n_samples', 1)):.1%} prevalence) "
-                    f"at decision threshold {metrics.get('threshold', 0.5):.2f}."
+                n_samp = metrics.get("n_samples", "—")
+                n_pos = metrics.get("n_positive", "—")
+                prev = (
+                    f"{metrics.get('n_positive', 0) / max(1, metrics.get('n_samples', 1)):.1%}"
+                    if isinstance(n_samp, int) and n_samp > 0
+                    else "—"
+                )
+                st.markdown(
+                    f'<div class="is-kv-item" style="display:flex;justify-content:space-between;align-items:center;margin:0.5rem 0 1rem 0;">'
+                    f'<div><b>F1-Score (Harmonic Mean):</b> <code>{metrics["f1"]:.3f}</code></div>'
+                    f'<div style="font-size:0.8rem;color:#64748B;">Evaluated on <b>{n_samp:,}</b> validation claims ({n_pos:,} fraud cases · {prev} prevalence) at threshold <b>{metrics.get("threshold", 0.5):.2f}</b></div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
                 )
 
             if confusion is not None:
-                st.markdown("##### Confusion Matrix (Validation Split)")
+                st.markdown("##### Confusion Matrix & Diagnostic Performance")
                 render_confusion_matrix_card(confusion)
+
+            render_evaluation_curves(roc_data=roc_data, pr_data=pr_data, roc_auc=metrics.get("roc_auc") if metrics else None)
 
             st.markdown("##### Methodological Transparency & Limitations")
             if tab_domain == HEALTH_DOMAIN:
@@ -788,6 +836,11 @@ def main() -> None:
     scores = _get_scores(domain, model, dataset, sampling_params)
     table = build_investigation_table(domain, dataset, scores)
 
+    # Validate that selected_claim_key remains valid after sampling or domain changes
+    selected = st.session_state.get("selected_claim_key")
+    if selected is not None and selected not in dataset.X[CLAIM_KEY_COL].values:
+        st.session_state["selected_claim_key"] = None
+
     # Render system status in sidebar
     sidebar_system_status(True, len(table), model_dir.name, domain)
     sidebar_footer()
@@ -803,5 +856,5 @@ def main() -> None:
         _render_insights(domain, model_dir)
 
 
-if __name__ == "__main__" or True:
+if __name__ == "__main__":
     main()

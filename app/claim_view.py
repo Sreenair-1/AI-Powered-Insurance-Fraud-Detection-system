@@ -268,15 +268,23 @@ def run_forensic_checks(document: Any, page_index: int = 0) -> ForensicUploadRes
 
     try:
         ela = compute_ela(document)
-    except (ELAImageLoadError, Exception):
+    except ELAImageLoadError:
         ela = None
+    except (OSError, ValueError, RuntimeError):
+        ela = None
+
     try:
         copy_move = compute_copy_move(document)
-    except (CopyMoveImageLoadError, Exception):
+    except CopyMoveImageLoadError:
         copy_move = None
+    except (OSError, ValueError, RuntimeError):
+        copy_move = None
+
     try:
         metadata = analyze_metadata(document)
-    except (MetadataImageLoadError, Exception):
+    except MetadataImageLoadError:
+        metadata = None
+    except (OSError, ValueError, RuntimeError):
         metadata = None
     return ForensicUploadResult(ela=ela, copy_move=copy_move, metadata=metadata)
 

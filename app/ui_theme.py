@@ -372,6 +372,167 @@ _CSS = """
         overflow: hidden;
     }
 
+    /* Heatmap Confusion Matrix */
+    .is-cm-container {
+        background: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 12px;
+        padding: 1.25rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+    }
+    .is-cm-grid {
+        display: grid;
+        grid-template-columns: 140px 1fr 1fr 110px;
+        gap: 8px;
+        align-items: stretch;
+        margin: 1rem 0;
+    }
+    .is-cm-header-cell {
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: #475569;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 0.4rem;
+    }
+    .is-cm-row-label {
+        font-size: 0.8rem;
+        font-weight: 700;
+        color: #1E293B;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: 0.5rem;
+    }
+    .is-cm-row-sub {
+        font-size: 0.7rem;
+        color: #64748B;
+        font-weight: 400;
+    }
+    .is-cm-tile {
+        border-radius: 8px;
+        padding: 0.9rem 0.75rem;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        transition: transform 0.15s ease;
+    }
+    .is-cm-tile:hover {
+        transform: translateY(-1px);
+    }
+    .is-cm-tile-tn {
+        background: #F0FDF4;
+        border: 1.5px solid #86EFAC;
+        color: #14532D;
+    }
+    .is-cm-tile-fp {
+        background: #FEF2F2;
+        border: 1.5px solid #FCA5A5;
+        color: #991B1B;
+    }
+    .is-cm-tile-fn {
+        background: #FFFBEB;
+        border: 1.5px solid #FDE68A;
+        color: #92400E;
+    }
+    .is-cm-tile-tp {
+        background: #F0FDFA;
+        border: 1.5px solid #99F6E4;
+        color: #0F766E;
+    }
+    .is-cm-tile-val {
+        font-size: 1.45rem;
+        font-weight: 800;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
+    }
+    .is-cm-tile-sub {
+        font-size: 0.74rem;
+        font-weight: 600;
+        margin-top: 0.2rem;
+        opacity: 0.85;
+    }
+    .is-cm-total-cell {
+        background: #F8FAFC;
+        border: 1px solid #E2E8F0;
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        padding: 0.5rem;
+        font-size: 0.88rem;
+        font-weight: 700;
+        color: #334155;
+    }
+
+    /* Triage Review Queue Banner */
+    .is-triage-banner {
+        background: linear-gradient(135deg, #0B192C 0%, #1E293B 100%);
+        border: 1px solid rgba(226, 232, 240, 0.15);
+        border-radius: 10px;
+        padding: 0.85rem 1.25rem;
+        margin: 0.8rem 0 1.2rem 0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        color: #FFFFFF;
+    }
+    .is-triage-title {
+        font-size: 0.92rem;
+        font-weight: 700;
+        color: #F8FAFC;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .is-triage-sub {
+        font-size: 0.78rem;
+        color: #CBD5E1;
+        margin-top: 0.15rem;
+    }
+    .is-triage-badge-group {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+    }
+
+    /* Delta Score Badges */
+    .is-delta-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.2rem 0.55rem;
+        border-radius: 6px;
+        font-size: 0.76rem;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+    .is-delta-pos {
+        background: #FEF2F2;
+        color: #DC2626;
+        border: 1px solid #FCA5A5;
+    }
+    .is-delta-neg {
+        background: #ECFDF5;
+        color: #059669;
+        border: 1px solid #A7F3D0;
+    }
+    .is-delta-flat {
+        background: #F1F5F9;
+        color: #475569;
+        border: 1px solid #CBD5E1;
+    }
+
     /* Footer in Sidebar */
     .is-sidebar-footer {
         font-size: 0.7rem;
@@ -526,3 +687,43 @@ def sidebar_footer() -> None:
         '</div>',
         unsafe_allow_html=True,
     )
+
+
+def triage_banner(review_count: int, total_count: int, high_count: int, medium_count: int) -> None:
+    """Render a prominent, high-impact investigation priority banner."""
+    pct = (review_count / total_count * 100.0) if total_count > 0 else 0.0
+    st.markdown(
+        f'<div class="is-triage-banner">'
+        f'<div>'
+        f'<div class="is-triage-title">Priority Investigation Queue · {review_count:,} Claims Requiring Review ({pct:.1f}%)</div>'
+        f'<div class="is-triage-sub">Actionable claims exceeding decision thresholds ({high_count:,} High Risk · {medium_count:,} Medium Risk).</div>'
+        f'</div>'
+        f'<div class="is-triage-badge-group">'
+        f'{status_badge(f"{high_count:,} High", "danger")}'
+        f'{status_badge(f"{medium_count:,} Medium", "warning")}'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def delta_badge(diff_prob: float) -> str:
+    """Generate a stylized HTML badge showing score delta before vs after forensic evidence."""
+    if diff_prob > 0.001:
+        cls = "is-delta-pos"
+        arrow = "▲"
+        sign = "+"
+    elif diff_prob < -0.001:
+        cls = "is-delta-neg"
+        arrow = "▼"
+        sign = ""
+    else:
+        cls = "is-delta-flat"
+        arrow = "●"
+        sign = ""
+    return (
+        f'<span class="is-delta-badge {cls}">'
+        f'{arrow} {sign}{diff_prob:.1%}'
+        f'</span>'
+    )
+

@@ -23,6 +23,8 @@ PathLike = Union[str, Path]
 
 EVAL_METRICS_FILENAME = "eval_metrics.json"
 CONFUSION_MATRIX_FILENAME = "confusion_matrix.json"
+ROC_CURVE_FILENAME = "roc_curve.json"
+PR_CURVE_FILENAME = "pr_curve.json"
 
 
 class ModelNotAvailableError(RuntimeError):
@@ -79,6 +81,34 @@ def load_confusion_matrix(directory: PathLike) -> Optional[dict]:
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_roc_curve(directory: PathLike) -> Optional[dict]:
+    """Load the `roc_curve.json` sidecar or embedded ROC curve data, if present.
+
+    Returns a dict with 'fpr', 'tpr', and optional 'thresholds' lists, or None.
+    """
+    path = Path(directory) / ROC_CURVE_FILENAME
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    metrics = load_eval_metrics(directory)
+    if metrics and isinstance(metrics.get("roc_curve"), dict):
+        return metrics["roc_curve"]
+    return None
+
+
+def load_pr_curve(directory: PathLike) -> Optional[dict]:
+    """Load the `pr_curve.json` sidecar or embedded PR curve data, if present.
+
+    Returns a dict with 'precision', 'recall', and optional 'thresholds' lists, or None.
+    """
+    path = Path(directory) / PR_CURVE_FILENAME
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    metrics = load_eval_metrics(directory)
+    if metrics and isinstance(metrics.get("pr_curve"), dict):
+        return metrics["pr_curve"]
+    return None
 
 
 @st.cache_resource(show_spinner="Loading health fraud model...")
