@@ -6,11 +6,14 @@ run forensics, or change risk-threshold semantics. See `docs/app_ui.md`.
 from __future__ import annotations
 
 import html
+import json
 from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
+import networkx as nx
 from PIL import Image
 
 from app.claim_view import ForensicUploadResult
@@ -471,7 +474,7 @@ def grouped_attribute_cards(row: pd.Series, groups: dict[str, tuple[str, ...]]) 
             st.dataframe(detail, hide_index=True, width="stretch")
 
 
-def render_graph_signals(fused_row: pd.Series) -> None:
+def render_graph_signals(fused_row: pd.Series, graph: nx.Graph, claim_key: str) -> None:
     """Render graph relationship indicators and entity network signals with clear differentiation."""
     st.markdown("##### Graph Relationship & Network Evidence")
     shared = bool(fused_row.get("has_shared_entity")) if "has_shared_entity" in fused_row.index else False
@@ -506,6 +509,62 @@ def render_graph_signals(fused_row: pd.Series) -> None:
         "shared provider, garage, bank account, or attending physician. These relationships "
         "warrant examination, but do not automatically indicate a confirmed fraud ring."
     )
+
+    # Show the selected claim's immediate entity neighborhood and the other
+    # claims connected through those entities. Keep the browser view bounded.
+    selected = str(claim_key)
+    if selected not in graph:
+        st.info("The selected claim is not present in the loaded relationship graph.")
+        return
+    neighborhood = {selected}
+    for entity in graph.neighbors(selected):
+        neighborhood.add(entity)
+        neighborhood.update(n for n in graph.neighbors(entity) if n != selected)
+    ordered = [selected] + sorted(neighborhood - {selected})[:79]
+    visible = graph.subgraph(ordered)
+    palette = {
+        "claim": "#0F766E", "provider": "#2563EB", "physician": "#7C3AED",
+        "beneficiary": "#0891B2", "garage": "#D97706", "bank_account": "#DB2777",
+    }
+    nodes = []
+    for node, attrs in visible.nodes(data=True):
+        kind = str(attrs.get("node_type", "entity"))
+        raw_label = str(node).split(":", 1)[-1]
+        nodes.append({
+            "id": str(node),
+            "label": ("Selected claim\n" if str(node) == selected else f"{kind.replace('_', ' ').title()}\n") + raw_label,
+            "group": kind,
+            "color": {"background": "#F59E0B", "border": "#B45309"} if str(node) == selected else palette.get(kind, "#64748B"),
+            "shape": "dot",
+            "size": 27 if str(node) == selected else (20 if kind == "claim" else 16),
+            "title": html.escape(f"{kind.replace('_', ' ').title()}: {raw_label}"),
+        })
+    edges = [
+        {"from": str(a), "to": str(b), "label": str(attrs.get("edge_type", "related")).replace("claim_", ""), "color": {"color": "#CBD5E1", "highlight": "#0F766E"}}
+        for a, b, attrs in visible.edges(data=True)
+    ]
+    graph_data = json.dumps({"nodes": nodes, "edges": edges}).replace("</", "<\\/")
+    components.html(f"""
+<div style="font:13px system-ui,sans-serif;color:#334155">
+  <div style="display:flex;gap:14px;align-items:center;margin:4px 0 8px;flex-wrap:wrap">
+    <strong>Interactive claim network</strong><span>Drag nodes to rearrange · scroll to zoom · select a node to inspect it</span>
+  </div>
+  <div id="network" style="height:440px;border:1px solid #E2E8F0;border-radius:10px;background:#fff"></div>
+</div>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<script>
+const data = {graph_data};
+const network = new vis.Network(document.getElementById('network'), {{
+  nodes: new vis.DataSet(data.nodes), edges: new vis.DataSet(data.edges)
+}}, {{
+  physics: {{ stabilization: {{ iterations: 180 }}, barnesHut: {{ gravitationalConstant: -4500, springLength: 125 }} }},
+  interaction: {{ hover: true, navigationButtons: true, keyboard: true }},
+  nodes: {{ font: {{ face: 'Arial', size: 12, color: '#0F172A' }}, borderWidth: 2 }},
+  edges: {{ smooth: {{ type: 'dynamic' }}, font: {{ size: 9, color: '#64748B', align: 'middle' }}, arrows: {{ to: {{ enabled: false }} }} }}
+}});
+network.fit({{ animation: {{ duration: 500 }} }});
+</script>
+""", height=495, scrolling=False)
 
 
 # ---------------------------------------------------------------------------

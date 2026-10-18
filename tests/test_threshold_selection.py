@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from src.models.evaluation import compute_classification_metrics, select_threshold
+from src.models.evaluation import compute_classification_metrics, probability_distribution, select_threshold
 
 
 def test_metrics_include_ap_specificity_balanced_accuracy_and_review_volume():
@@ -40,3 +40,41 @@ def test_review_capacity_and_infeasible_constraint_are_explicit():
 def test_invalid_threshold_objective_parameters_raise():
     with pytest.raises(ValueError, match="required"):
         select_threshold([0, 1], [0.1, 0.9], "recall_at_precision")
+
+
+def test_max_f1_does_not_choose_trivial_all_positive_threshold():
+    result = select_threshold([0, 0, 1, 1], [0.2, 0.3, 0.31, 0.32], "max_f1")
+    assert result.metrics.review_volume < 4
+    assert result.metrics.review_volume > 0
+
+
+def test_max_f1_rejects_near_all_positive_optimum_and_fixed_baseline_is_safe():
+    y = [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+    p = [.5] * len(y)
+    with pytest.raises(ValueError, match="more than 90%"):
+        select_threshold(y, p, "max_f1")
+    fixed = select_threshold(y, p, "fixed_0_5")
+    assert fixed.threshold == .5
+    assert fixed.metrics.review_volume == 10
+
+
+def test_constraints_compose_and_infeasibility_is_not_relaxed():
+    selected = select_threshold([0, 0, 1, 1], [.1, .4, .6, .9], "recall_at_precision",
+                                min_precision=.8, review_capacity=2)
+    assert selected.metrics.precision >= .8
+    assert selected.metrics.review_volume <= 2
+    with pytest.raises(ValueError, match="infeasible threshold constraints"):
+        select_threshold([0, 0, 1, 1], [.1, .4, .6, .9], "recall_at_precision",
+                         min_precision=.8, min_recall=1, review_capacity=1)
+
+
+def test_fixed_reference_threshold_does_not_silently_move_to_satisfy_constraints():
+    with pytest.raises(ValueError, match="infeasible threshold constraints at fixed"):
+        select_threshold([0, 0, 1, 1], [.1, .4, .6, .9], "fixed_0_5", review_capacity=1)
+
+
+def test_probability_distribution_reports_quantiles_and_histogram():
+    result = probability_distribution([.05, .25, .75, .95])
+    assert result["count"] == 4
+    assert result["quantiles"]["0.5"] == pytest.approx(.5)
+    assert sum(result["histogram"]["counts"]) == 4

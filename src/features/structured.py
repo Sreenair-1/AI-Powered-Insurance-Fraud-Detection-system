@@ -111,7 +111,12 @@ def build_health_structured_features(
         "claim_type",
         "num_diagnosis_codes",
         "num_procedure_codes",
+        "InscClaimAmtReimbursed",
+        "DeductibleAmtPaid",
+        "claim_duration_days",
+        "admission_to_claim_days",
     ] + [c for c in _HEALTH_BENEFICIARY_FEATURE_COLUMNS if c in merged.columns]
+    feature_cols = [c for c in feature_cols if c in merged.columns]
     out = merged[feature_cols].copy()
     out = _drop_leakage_columns(out)
     claim_keys = [_claim_key(cid) for cid in out[HEALTH_CLAIM_ID_COL]]

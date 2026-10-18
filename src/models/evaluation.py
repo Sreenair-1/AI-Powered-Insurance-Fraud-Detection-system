@@ -104,8 +104,20 @@ def compute_confusion_matrix(y_true, y_proba, threshold=0.5) -> ConfusionMatrix:
     return ConfusionMatrix(int(tn), int(fp), int(fn), int(tp), float(threshold))
 
 
+def probability_distribution(y_proba) -> dict:
+    """Compact, JSON-safe score distribution summary for validation/test audits."""
+    p = np.asarray(y_proba, dtype=float)
+    if p.ndim != 1 or not len(p) or not np.isfinite(p).all() or ((p < 0) | (p > 1)).any():
+        raise ValueError("y_proba must be a non-empty vector of finite probabilities in [0, 1]")
+    q = (0, .01, .05, .25, .5, .75, .95, .99, 1)
+    return {"count": int(len(p)), "mean": float(p.mean()), "std": float(p.std()),
+            "quantiles": {str(v): float(np.quantile(p, v)) for v in q},
+            "histogram": {"bin_edges": [i / 10 for i in range(11)],
+                          "counts": np.histogram(p, bins=np.linspace(0, 1, 11))[0].astype(int).tolist()}}
+
+
 def select_threshold(
-    y_true, y_proba, objective: Literal["max_f1", "recall_at_precision", "precision_at_recall", "review_capacity"] = "max_f1",
+    y_true, y_proba, objective: Literal["fixed_0_5", "max_f1", "recall_at_precision", "precision_at_recall", "review_capacity"] = "fixed_0_5",
     *, min_precision: float | None = None, min_recall: float | None = None,
     review_capacity: int | None = None,
 ) -> ThresholdSelection:
@@ -115,7 +127,7 @@ def select_threshold(
     capacity objective, all claims at the cutoff probability are included.
     """
     y, p = _validate(y_true, y_proba, 0.5)
-    if objective not in {"max_f1", "recall_at_precision", "precision_at_recall", "review_capacity"}:
+    if objective not in {"fixed_0_5", "max_f1", "recall_at_precision", "precision_at_recall", "review_capacity"}:
         raise ValueError(f"unsupported threshold objective: {objective}")
     if objective == "recall_at_precision" and min_precision is None:
         raise ValueError("min_precision is required for recall_at_precision")
@@ -129,9 +141,64 @@ def select_threshold(
         raise ValueError(f"review_capacity must be between 0 and {len(y)}")
 
     thresholds = np.unique(np.r_[p, 0.0, 1.0])
-    candidates = [(float(t), compute_classification_metrics(y, p, float(t))) for t in thresholds]
-    if objective == "max_f1":
+    # Compute every operating point from one score sort. Repeatedly invoking
+    # sklearn metrics per unique score makes capacity sweeps needlessly slow.
+    order = np.argsort(p, kind="stable")
+    sorted_scores, sorted_y = p[order], y[order]
+    prefix_positive = np.r_[0, np.cumsum(sorted_y)]
+    n, positives = len(y), int(y.sum())
+    negatives = n - positives
+    roc_auc = float(roc_auc_score(y, p))
+    ap = float(average_precision_score(y, p))
+    candidates = []
+    for threshold in thresholds:
+        first = int(np.searchsorted(sorted_scores, threshold, side="left"))
+        volume = n - first
+        tp = positives - int(prefix_positive[first])
+        fp, fn, tn = volume - tp, positives - tp, negatives - (volume - tp)
+        precision = tp / volume if volume else 0.0
+        recall = tp / positives
+        specificity = tn / negatives if negatives else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        accuracy = (tp + tn) / n
+        metrics = ClassificationMetrics(
+            accuracy=accuracy, precision=precision, recall=recall, f1=f1,
+            roc_auc=roc_auc, threshold=float(threshold), n_samples=n,
+            n_positive=positives, average_precision=ap, specificity=specificity,
+            balanced_accuracy=(recall + specificity) / 2,
+            review_volume=volume, review_rate=volume / n,
+        )
+        candidates.append((float(threshold), metrics))
+    def satisfies(metrics):
+        return ((min_precision is None or metrics.precision >= min_precision)
+                and (min_recall is None or metrics.recall >= min_recall)
+                and (review_capacity is None or metrics.review_volume <= review_capacity))
+
+    constrained = any(v is not None for v in (min_precision, min_recall, review_capacity))
+    if objective == "fixed_0_5":
+        fixed_metrics = compute_classification_metrics(y, p, 0.5)
+        if not satisfies(fixed_metrics):
+            raise ValueError("infeasible threshold constraints at fixed threshold 0.5")
+        selected = (0.5, fixed_metrics)
+    elif constrained:
+        feasible = [x for x in candidates if satisfies(x[1])]
+        if not feasible:
+            requested = {"min_precision": min_precision, "min_recall": min_recall,
+                         "review_capacity": review_capacity}
+            raise ValueError(f"infeasible threshold constraints: {requested}")
+        if objective == "recall_at_precision":
+            selected = max(feasible, key=lambda x: (x[1].recall, x[1].precision, x[0]))
+        elif objective == "precision_at_recall":
+            selected = max(feasible, key=lambda x: (x[1].precision, x[1].recall, x[0]))
+        elif objective == "review_capacity":
+            selected = max(feasible, key=lambda x: (x[1].recall, x[1].precision, x[0]))
+        else:
+            selected = max(feasible, key=lambda x: (x[1].f1, x[0]))
+    elif objective == "max_f1":
         selected = max(candidates, key=lambda x: (x[1].f1, x[0]))
+        if selected[1].review_rate > 0.9:
+            raise ValueError("infeasible max_f1 selection: optimum flags more than 90% of claims; "
+                             "use fixed_0_5 or provide explicit precision/recall/review-capacity constraints")
     elif objective == "recall_at_precision":
         feasible = [x for x in candidates if x[1].precision >= min_precision]
         if not feasible:

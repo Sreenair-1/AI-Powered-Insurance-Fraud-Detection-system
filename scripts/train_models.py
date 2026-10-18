@@ -17,6 +17,7 @@ if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd
+import numpy as np
 
 from src.data.loaders import DatasetFileMissingError, load_health_train_tables, load_motor_claims
 from src.data.schemas import (HEALTH_PROVIDER_COL, HEALTH_PROVIDER_LABEL_COL, MOTOR_TARGET, PROJECT_ROOT)
@@ -26,7 +27,8 @@ from src.features.structured import build_health_structured_features, build_moto
 from src.features.graph import build_graph_claim_features
 from src.data.synthetic import assign_synthetic_entities
 from src.graph.construction import build_motor_graph
-from src.models.evaluation import compute_classification_metrics, compute_confusion_matrix, curve_data, select_threshold
+from src.models.evaluation import (compute_classification_metrics, compute_confusion_matrix,
+                                   curve_data, probability_distribution, select_threshold)
 from src.models.health import HealthFraudModel
 from src.models.motor import MotorFraudModel
 from src.models.persistence import save_health_model, save_motor_model
@@ -89,12 +91,17 @@ def _evaluate_and_save(model, X_val, y_val, X_test, y_test, directory: Path, obj
                 compute_confusion_matrix(y_val, p_val, selection.threshold).to_dict())
     _write_json(directory, "roc_curve.json", roc_data)
     _write_json(directory, "pr_curve.json", pr_data)
+    _write_json(directory, "probability_diagnostics.json", {
+        "validation": probability_distribution(p_val), "untouched_test": probability_distribution(p_test),
+        "score_mean_by_class_validation": {str(c): float(np.mean(p_val[np.asarray(y_val) == c])) for c in (0, 1)},
+        "score_mean_by_class_test": {str(c): float(np.mean(p_test[np.asarray(y_test) == c])) for c in (0, 1)},
+    })
     print(f"validation threshold selection: {selection.to_dict()}")
     print(f"validation baseline @0.50: {val_metrics_baseline.to_dict()}")
     print(f"untouched test @frozen threshold: {test_metrics.to_dict()}")
 
 
-def train_motor(output_dir: Path, sample_size: int | None, seed: int, objective: str = "max_f1",
+def train_motor(output_dir: Path, sample_size: int | None, seed: int, objective: str = "fixed_0_5",
                 min_precision: float | None = None, min_recall: float | None = None,
                 review_capacity: int | None = None) -> None:
     raw = load_motor_claims()
@@ -118,6 +125,15 @@ def train_motor(output_dir: Path, sample_size: int | None, seed: int, objective:
     experiment["representation_comparison"] = {
         name: {"validation_average_precision": result[0]} for name, result in representations.items()
     }
+    capacity_metrics = {}
+    for name, (_, candidate_model, _, candidate_parts) in representations.items():
+        validation_scores = candidate_model.predict_proba(candidate_parts["val"])
+        capacity_metrics[name] = {}
+        for rate in (.01, .05, .10, .20):
+            cap = max(1, int(len(y_val) * rate))
+            selected = select_threshold(y_val, validation_scores, "review_capacity", review_capacity=cap)
+            capacity_metrics[name][str(rate)] = selected.to_dict()
+    experiment["validation_review_capacity_comparison"] = capacity_metrics
     experiment["selected_representation"] = chosen_name
     out = save_motor_model(model, output_dir)
     _write_json(out, "validation_experiment.json", experiment)
@@ -135,7 +151,7 @@ def train_motor(output_dir: Path, sample_size: int | None, seed: int, objective:
 
 
 def train_health(output_dir: Path, inpatient_sample_size: int | None, outpatient_sample_size: int | None,
-                 seed: int, objective: str = "max_f1", min_precision: float | None = None,
+                 seed: int, objective: str = "fixed_0_5", min_precision: float | None = None,
                  min_recall: float | None = None, review_capacity: int | None = None) -> None:
     tables = load_health_train_tables()
     source_claim_ids = [tables.inpatient["ClaimID"].astype(str), tables.outpatient["ClaimID"].astype(str)]
@@ -171,6 +187,13 @@ def train_health(output_dir: Path, inpatient_sample_size: int | None, outpatient
     )
     out = save_health_model(model, output_dir)
     _write_json(out, "validation_experiment.json", experiment)
+    health_val_scores = model.predict_proba(partitions["val"])
+    experiment["validation_review_capacity_comparison"] = {}
+    for rate in (.01, .05, .10, .20):
+        cap = max(1, int(len(labels["val"]) * rate))
+        choice = select_threshold(labels["val"], health_val_scores, "review_capacity", review_capacity=cap)
+        experiment["validation_review_capacity_comparison"][str(rate)] = choice.to_dict()
+    _write_json(out, "validation_experiment.json", experiment)
     provider_prevalence = tables.main[HEALTH_PROVIDER_LABEL_COL].eq("Yes").mean()
     sampled_provider_prevalence = providers[HEALTH_PROVIDER_LABEL_COL].eq("Yes").mean()
     val_prevalence = labels["val"].mean()
@@ -185,9 +208,37 @@ def train_health(output_dir: Path, inpatient_sample_size: int | None, outpatient
         "claim_id_overlap_between_sources": source_id_overlap,
         "providers_crossing_splits": provider_split_overlap,
         "label_semantics": "PotentialFraud is provider-derived and inherited by claims; not verified claim-level fraud",
+        "feature_quality": {name: {"dtype": str(partitions["train"][name].dtype),
+                                   "missing_rate_train": float(partitions["train"][name].isna().mean()),
+                                   "unique_train": int(partitions["train"][name].nunique(dropna=True)),
+                                   "missing_rate_validation": float(partitions["val"][name].isna().mean()),
+                                   "unique_validation": int(partitions["val"][name].nunique(dropna=True))}
+                            for name in partitions["train"].columns if name != "claim_key"},
+        "sampling": {"strategy": "uniform claim-row sample within inpatient and outpatient tables before provider partitioning",
+                     "inpatient_rows": int(len(inpatient)), "outpatient_rows": int(len(outpatient))},
     })
     _evaluate_and_save(model, partitions["val"], labels["val"], partitions["test"], labels["test"], out,
                        objective, min_precision, min_recall, review_capacity)
+    test_scores = model.predict_proba(partitions["test"])
+    claim_provider = claims[["ClaimID", HEALTH_PROVIDER_COL]].copy()
+    claim_provider["claim_key"] = "claim:" + claim_provider["ClaimID"].astype(str)
+    provider_rows = partitions["test"][["claim_key"]].copy()
+    provider_rows["score"] = test_scores
+    provider_rows = provider_rows.merge(claim_provider[["claim_key", HEALTH_PROVIDER_COL]],
+                                        on="claim_key", validate="one_to_one")
+    provider_rows["target"] = labels["test"].to_numpy()
+    provider_scores = provider_rows.groupby(HEALTH_PROVIDER_COL).agg(
+        score=("score", "mean"), target=("target", "first"), claim_count=("target", "size")
+    ).reset_index()
+    provider_metrics = compute_classification_metrics(
+        provider_scores["target"], provider_scores["score"], 0.5
+    )
+    _write_json(out, "provider_grouped_test_metrics.json", {
+        "split": "untouched_test", "aggregation": "mean claim score per held-out provider",
+        "n_providers": int(len(provider_scores)), "threshold": 0.5,
+        "metrics": provider_metrics.to_dict(),
+        "label_semantics": "provider PotentialFraud proxy label; not claim-level fraud",
+    })
     print(
         f"health PotentialFraud provider prevalence: full labeled provider table={provider_prevalence:.3%}; "
         f"providers represented in sampled claims={sampled_provider_prevalence:.3%}; "
@@ -206,7 +257,7 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--motor-sample-size", type=int, default=20000)
     parser.add_argument("--health-inpatient-sample-size", type=int, default=8000)
     parser.add_argument("--health-outpatient-sample-size", type=int, default=20000)
-    parser.add_argument("--threshold-objective", choices=["max_f1", "recall_at_precision", "precision_at_recall", "review_capacity"], default="max_f1")
+    parser.add_argument("--threshold-objective", choices=["fixed_0_5", "max_f1", "recall_at_precision", "precision_at_recall", "review_capacity"], default="fixed_0_5")
     parser.add_argument("--min-precision", type=float)
     parser.add_argument("--min-recall", type=float)
     parser.add_argument("--review-capacity", type=int)

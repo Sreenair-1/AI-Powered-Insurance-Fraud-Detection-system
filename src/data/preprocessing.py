@@ -71,6 +71,18 @@ def build_health_claims_table(inpatient_df: pd.DataFrame, outpatient_df: pd.Data
     proc_cols = [c for c in HEALTH_PROCEDURE_CODE_COLUMNS if c in combined.columns]
     combined["num_diagnosis_codes"] = combined[diag_cols].notna().sum(axis=1)
     combined["num_procedure_codes"] = combined[proc_cols].notna().sum(axis=1)
+    # Claim-level utilization/severity proxies available in both source tables.
+    # Do not expose Provider or physician identifiers: the target is itself a
+    # provider label, and identity memorization would invalidate group holdout.
+    for col in ("InscClaimAmtReimbursed", "DeductibleAmtPaid"):
+        if col in combined.columns:
+            combined[col] = pd.to_numeric(combined[col], errors="coerce")
+    start = pd.to_datetime(combined["ClaimStartDt"], errors="coerce") if "ClaimStartDt" in combined else pd.Series(pd.NaT, index=combined.index)
+    end = pd.to_datetime(combined["ClaimEndDt"], errors="coerce") if "ClaimEndDt" in combined else pd.Series(pd.NaT, index=combined.index)
+    combined["claim_duration_days"] = (end - start).dt.days.clip(lower=0)
+    if "AdmissionDt" in combined.columns:
+        admission = pd.to_datetime(combined["AdmissionDt"], errors="coerce")
+        combined["admission_to_claim_days"] = (start - admission).dt.days.clip(lower=0)
     return combined
 
 

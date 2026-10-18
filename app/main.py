@@ -419,7 +419,7 @@ def _render_claim_detail(domain: str, model, dataset, claim_key: str) -> None:
     grouped_attribute_cards(info, MOTOR_GROUPS if domain == MOTOR_DOMAIN else HEALTH_GROUPS)
 
     # Section E: Graph Relationship Signals
-    render_graph_signals(fused)
+    render_graph_signals(fused, dataset.graph, claim_key)
 
     # Session-Only Investigation Notes
     st.markdown("##### Investigation Notes & Triage Status")

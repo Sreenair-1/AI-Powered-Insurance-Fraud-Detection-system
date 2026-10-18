@@ -69,9 +69,16 @@ _CSS = """
         border-color: rgba(226, 232, 240, 0.12);
         margin: 1rem 0;
     }
-    [data-testid="stSidebar"] .stRadio label {
+    /* Streamlit versions render radio options as nested markdown, spans, or
+       labels. Style the full option subtree so none inherit a dark text color. */
+    [data-testid="stSidebar"] [data-testid="stRadio"] label,
+    [data-testid="stSidebar"] [data-testid="stRadio"] label *,
+    [data-testid="stSidebar"] [data-testid="stRadio"] [data-testid="stMarkdownContainer"],
+    [data-testid="stSidebar"] [data-testid="stRadio"] [data-testid="stMarkdownContainer"] * {
         color: #E2E8F0 !important;
         font-size: 0.88rem;
+        opacity: 1 !important;
+        visibility: visible !important;
     }
     [data-testid="stSidebar"] .stSlider label {
         color: #CBD5E1 !important;
