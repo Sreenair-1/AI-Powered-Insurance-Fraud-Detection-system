@@ -1,0 +1,311 @@
+{
+  "version": 1,
+  "model_type": "motor",
+  "feature_columns": [
+    "Month",
+    "WeekOfMonth",
+    "DayOfWeek",
+    "Make",
+    "AccidentArea",
+    "DayOfWeekClaimed",
+    "MonthClaimed",
+    "WeekOfMonthClaimed",
+    "Sex",
+    "MaritalStatus",
+    "Age",
+    "Fault",
+    "PolicyType",
+    "VehicleCategory",
+    "VehiclePrice",
+    "Deductible",
+    "DriverRating",
+    "Days_Policy_Accident",
+    "Days_Policy_Claim",
+    "PastNumberOfClaims",
+    "AgeOfVehicle",
+    "AgeOfPolicyHolder",
+    "PoliceReportFiled",
+    "WitnessPresent",
+    "AgentType",
+    "NumberOfSuppliments",
+    "AddressChange_Claim",
+    "NumberOfCars",
+    "Year",
+    "BasePolicy"
+  ],
+  "categorical_dtypes": {
+    "Month": {
+      "categories": [
+        "Apr",
+        "Aug",
+        "Dec",
+        "Feb",
+        "Jan",
+        "Jul",
+        "Jun",
+        "Mar",
+        "May",
+        "Nov",
+        "Oct",
+        "Sep"
+      ],
+      "ordered": false
+    },
+    "DayOfWeek": {
+      "categories": [
+        "Friday",
+        "Monday",
+        "Saturday",
+        "Sunday",
+        "Thursday",
+        "Tuesday",
+        "Wednesday"
+      ],
+      "ordered": false
+    },
+    "Make": {
+      "categories": [
+        "Accura",
+        "BMW",
+        "Chevrolet",
+        "Dodge",
+        "Ferrari",
+        "Ford",
+        "Honda",
+        "Jaguar",
+        "Lexus",
+        "Mazda",
+        "Mecedes",
+        "Mercury",
+        "Nisson",
+        "Pontiac",
+        "Porche",
+        "Saab",
+        "Saturn",
+        "Toyota",
+        "VW"
+      ],
+      "ordered": false
+    },
+    "AccidentArea": {
+      "categories": [
+        "Rural",
+        "Ur    ban",
+        "Urban"
+      ],
+      "ordered": false
+    },
+    "DayOfWeekClaimed": {
+      "categories": [
+        "0",
+        "Friday",
+        "Monday",
+        "Saturday",
+        "Sunday",
+        "Thursday",
+        "Tuesday",
+        "Wednesday"
+      ],
+      "ordered": false
+    },
+    "MonthClaimed": {
+      "categories": [
+        "0",
+        "Apr",
+        "Aug",
+        "Dec",
+        "Feb",
+        "Jan",
+        "Jul",
+        "Jun",
+        "Mar",
+        "May",
+        "Nov",
+        "Oct",
+        "Sep"
+      ],
+      "ordered": false
+    },
+    "Sex": {
+      "categories": [
+        "Female",
+        "Male"
+      ],
+      "ordered": false
+    },
+    "MaritalStatus": {
+      "categories": [
+        "Divorced",
+        "Married",
+        "Single",
+        "Widow"
+      ],
+      "ordered": false
+    },
+    "Fault": {
+      "categories": [
+        "Policy Holder",
+        "Third Party"
+      ],
+      "ordered": false
+    },
+    "PolicyType": {
+      "categories": [
+        "Sedan - All Perils",
+        "Sedan - Collision",
+        "Sedan - Liability",
+        "Sport - All Perils",
+        "Sport - Collision",
+        "Sport - Liability",
+        "Utility - All Perils",
+        "Utility - Collision",
+        "Utility - Liability"
+      ],
+      "ordered": false
+    },
+    "VehicleCategory": {
+      "categories": [
+        "Sedan",
+        "Sport",
+        "Utility"
+      ],
+      "ordered": false
+    },
+    "VehiclePrice": {
+      "categories": [
+        "20000 to 29000",
+        "30000 to 39000",
+        "40000 to 59000",
+        "60000 to 69000",
+        "less than 20000",
+        "more than 69000"
+      ],
+      "ordered": false
+    },
+    "Days_Policy_Accident": {
+      "categories": [
+        "1 to 7",
+        "15 to 30",
+        "8 to 15",
+        "more than 30",
+        "none"
+      ],
+      "ordered": false
+    },
+    "Days_Policy_Claim": {
+      "categories": [
+        "15 to 30",
+        "8 to 15",
+        "more than 30",
+        "none"
+      ],
+      "ordered": false
+    },
+    "PastNumberOfClaims": {
+      "categories": [
+        "1",
+        "2 to 4",
+        "more than 4",
+        "none"
+      ],
+      "ordered": false
+    },
+    "AgeOfVehicle": {
+      "categories": [
+        "2 years",
+        "3 years",
+        "4 years",
+        "5 years",
+        "6 years",
+        "7 years",
+        "more than 7",
+        "new"
+      ],
+      "ordered": false
+    },
+    "AgeOfPolicyHolder": {
+      "categories": [
+        "16 to 17",
+        "18 to 20",
+        "21 to 25",
+        "26 to 30",
+        "31 to 35",
+        "36 to 40",
+        "41 to 50",
+        "51 to 65",
+        "over 65"
+      ],
+      "ordered": false
+    },
+    "PoliceReportFiled": {
+      "categories": [
+        "No",
+        "Yes"
+      ],
+      "ordered": false
+    },
+    "WitnessPresent": {
+      "categories": [
+        "No",
+        "Yes"
+      ],
+      "ordered": false
+    },
+    "AgentType": {
+      "categories": [
+        "External",
+        "Internal"
+      ],
+      "ordered": false
+    },
+    "NumberOfSuppliments": {
+      "categories": [
+        "1 to 2",
+        "3 to 5",
+        "more than 5",
+        "none"
+      ],
+      "ordered": false
+    },
+    "AddressChange_Claim": {
+      "categories": [
+        "1 year",
+        "2 to 3 years",
+        "4 to 8 years",
+        "no change",
+        "under 6 months"
+      ],
+      "ordered": false
+    },
+    "NumberOfCars": {
+      "categories": [
+        "1 vehicle",
+        "2 vehicles",
+        "3 to 4",
+        "5 to 8",
+        "more than 8"
+      ],
+      "ordered": false
+    },
+    "BasePolicy": {
+      "categories": [
+        "All Perils",
+        "Collision",
+        "Liability"
+      ],
+      "ordered": false
+    }
+  },
+  "params": {
+    "n_estimators": 300,
+    "max_depth": 4,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "tree_method": "hist",
+    "enable_categorical": true,
+    "eval_metric": "aucpr",
+    "random_state": 42
+  },
+  "scale_pos_weight": 15.708978328173375
+}

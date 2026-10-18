@@ -1,0 +1,89 @@
+{
+  "labeled_provider_count": 5410,
+  "full_provider_positive_prevalence": 0.09353049907578559,
+  "sampled_claim_count": 28000,
+  "sampled_claim_proxy_positive_prevalence": 0.42457142857142854,
+  "validation_claim_proxy_positive_prevalence": 0.43846153846153846,
+  "inpatient_duplicate_claim_ids": 0,
+  "outpatient_duplicate_claim_ids": 0,
+  "claim_id_overlap_between_sources": 0,
+  "providers_crossing_splits": 0,
+  "label_semantics": "PotentialFraud is provider-derived and inherited by claims; not verified claim-level fraud",
+  "feature_quality": {
+    "claim_type": {
+      "dtype": "category",
+      "missing_rate_train": 0.0,
+      "unique_train": 2,
+      "missing_rate_validation": 0.0,
+      "unique_validation": 2
+    },
+    "num_diagnosis_codes": {
+      "dtype": "int64",
+      "missing_rate_train": 0.0,
+      "unique_train": 11,
+      "missing_rate_validation": 0.0,
+      "unique_validation": 11
+    },
+    "num_procedure_codes": {
+      "dtype": "int64",
+      "missing_rate_train": 0.0,
+      "unique_train": 6,
+      "missing_rate_validation": 0.0,
+      "unique_validation": 5
+    },
+    "InscClaimAmtReimbursed": {
+      "dtype": "int64",
+      "missing_rate_train": 0.0,
+      "unique_train": 146,
+      "missing_rate_validation": 0.0,
+      "unique_validation": 115
+    },
+    "DeductibleAmtPaid": {
+      "dtype": "float64",
+      "missing_rate_train": 0.006329113924050633,
+      "unique_train": 13,
+      "missing_rate_validation": 0.005048076923076923,
+      "unique_validation": 13
+    },
+    "claim_duration_days": {
+      "dtype": "int64",
+      "missing_rate_train": 0.0,
+      "unique_train": 36,
+      "missing_rate_validation": 0.0,
+      "unique_validation": 32
+    },
+    "admission_to_claim_days": {
+      "dtype": "float64",
+      "missing_rate_train": 0.6994181298489179,
+      "unique_train": 8,
+      "missing_rate_validation": 0.7766826923076923,
+      "unique_validation": 2
+    },
+    "is_deceased": {
+      "dtype": "bool",
+      "missing_rate_train": 0.0,
+      "unique_train": 2,
+      "missing_rate_validation": 0.0,
+      "unique_validation": 2
+    },
+    "chronic_condition_count": {
+      "dtype": "int64",
+      "missing_rate_train": 0.0,
+      "unique_train": 12,
+      "missing_rate_validation": 0.0,
+      "unique_validation": 12
+    },
+    "has_renal_disease": {
+      "dtype": "bool",
+      "missing_rate_train": 0.0,
+      "unique_train": 2,
+      "missing_rate_validation": 0.0,
+      "unique_validation": 2
+    }
+  },
+  "sampling": {
+    "strategy": "uniform claim-row sample within inpatient and outpatient tables before provider partitioning",
+    "inpatient_rows": 8000,
+    "outpatient_rows": 20000
+  }
+}

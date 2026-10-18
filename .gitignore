@@ -13,7 +13,6 @@ pytest_runtime_tmp/
 # Data and model artifacts (generated, not source)
 data/*
 !data/.gitkeep
-models/*
 !models/.gitkeep
 models_experiments/
 

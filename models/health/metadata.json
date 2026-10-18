@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "model_type": "health",
+  "feature_names": [
+    "claim_type",
+    "num_diagnosis_codes",
+    "num_procedure_codes",
+    "InscClaimAmtReimbursed",
+    "DeductibleAmtPaid",
+    "claim_duration_days",
+    "admission_to_claim_days",
+    "is_deceased",
+    "chronic_condition_count",
+    "has_renal_disease"
+  ],
+  "params": {
+    "n_estimators": 200,
+    "max_depth": 3,
+    "learning_rate": 0.1,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "objective": "binary:logistic",
+    "eval_metric": "aucpr",
+    "tree_method": "hist",
+    "enable_categorical": true,
+    "random_state": 42,
+    "n_jobs": -1
+  },
+  "explicit_scale_pos_weight": null
+}

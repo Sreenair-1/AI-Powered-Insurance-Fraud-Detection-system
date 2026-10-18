@@ -1,0 +1,22 @@
+{
+  "split": "untouched_test",
+  "aggregation": "mean claim score per held-out provider",
+  "n_providers": 564,
+  "threshold": 0.5,
+  "metrics": {
+    "accuracy": 0.7411347517730497,
+    "precision": 0.3081081081081081,
+    "recall": 0.76,
+    "f1": 0.43846153846153846,
+    "roc_auc": 0.7629720518064077,
+    "threshold": 0.5,
+    "n_samples": 564,
+    "n_positive": 75,
+    "average_precision": 0.2749916268598165,
+    "specificity": 0.7382413087934561,
+    "balanced_accuracy": 0.749120654396728,
+    "review_volume": 185,
+    "review_rate": 0.3280141843971631
+  },
+  "label_semantics": "provider PotentialFraud proxy label; not claim-level fraud"
+}

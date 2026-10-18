@@ -1,0 +1,109 @@
+{
+  "selection_metric": "validation_average_precision",
+  "candidates": [
+    {
+      "parameters": {},
+      "validation_average_precision": 0.46716797632294715
+    },
+    {
+      "parameters": {
+        "max_depth": 3
+      },
+      "validation_average_precision": 0.4700050055410774
+    }
+  ],
+  "selected_parameters": {
+    "max_depth": 3
+  },
+  "selected_validation_average_precision": 0.4700050055410774,
+  "validation_review_capacity_comparison": {
+    "0.01": {
+      "threshold": 0.7311980724334717,
+      "objective": "review_capacity",
+      "constraints": {
+        "review_capacity": 41
+      },
+      "metrics": {
+        "accuracy": 0.5629807692307692,
+        "precision": 0.575,
+        "recall": 0.012609649122807017,
+        "f1": 0.02467811158798283,
+        "roc_auc": 0.5216025435216896,
+        "threshold": 0.7311980724334717,
+        "n_samples": 4160,
+        "n_positive": 1824,
+        "average_precision": 0.4700050055410774,
+        "specificity": 0.992722602739726,
+        "balanced_accuracy": 0.5026661259312665,
+        "review_volume": 40,
+        "review_rate": 0.009615384615384616
+      }
+    },
+    "0.05": {
+      "threshold": 0.6701791286468506,
+      "objective": "review_capacity",
+      "constraints": {
+        "review_capacity": 208
+      },
+      "metrics": {
+        "accuracy": 0.5651442307692308,
+        "precision": 0.5362318840579711,
+        "recall": 0.06085526315789474,
+        "f1": 0.10930576070901035,
+        "roc_auc": 0.5216025435216896,
+        "threshold": 0.6701791286468506,
+        "n_samples": 4160,
+        "n_positive": 1824,
+        "average_precision": 0.4700050055410774,
+        "specificity": 0.958904109589041,
+        "balanced_accuracy": 0.5098796863734679,
+        "review_volume": 207,
+        "review_rate": 0.04975961538461538
+      }
+    },
+    "0.1": {
+      "threshold": 0.6511964201927185,
+      "objective": "review_capacity",
+      "constraints": {
+        "review_capacity": 416
+      },
+      "metrics": {
+        "accuracy": 0.5653846153846154,
+        "precision": 0.5193236714975845,
+        "recall": 0.11787280701754387,
+        "f1": 0.19213583556747096,
+        "roc_auc": 0.5216025435216896,
+        "threshold": 0.6511964201927185,
+        "n_samples": 4160,
+        "n_positive": 1824,
+        "average_precision": 0.4700050055410774,
+        "specificity": 0.9148116438356164,
+        "balanced_accuracy": 0.5163422254265801,
+        "review_volume": 414,
+        "review_rate": 0.09951923076923076
+      }
+    },
+    "0.2": {
+      "threshold": 0.6081147789955139,
+      "objective": "review_capacity",
+      "constraints": {
+        "review_capacity": 832
+      },
+      "metrics": {
+        "accuracy": 0.5677884615384615,
+        "precision": 0.515625,
+        "recall": 0.23519736842105263,
+        "f1": 0.32304216867469876,
+        "roc_auc": 0.5216025435216896,
+        "threshold": 0.6081147789955139,
+        "n_samples": 4160,
+        "n_positive": 1824,
+        "average_precision": 0.4700050055410774,
+        "specificity": 0.8274828767123288,
+        "balanced_accuracy": 0.5313401225666907,
+        "review_volume": 832,
+        "review_rate": 0.2
+      }
+    }
+  }
+}

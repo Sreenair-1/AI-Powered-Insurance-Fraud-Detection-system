@@ -1,0 +1,15 @@
+{
+  "dataset_rows": 15420,
+  "exact_duplicate_rows": 0,
+  "native_claim_identifier": null,
+  "split_strategy": "stratified row split; source has no claim identifier",
+  "selected_features": "structured only",
+  "synthetic_graph_representation_comparison": {
+    "structured_only": {
+      "validation_average_precision": 0.27076667582248043
+    },
+    "structured_plus_split_graph": {
+      "validation_average_precision": 0.2545375999046526
+    }
+  }
+}

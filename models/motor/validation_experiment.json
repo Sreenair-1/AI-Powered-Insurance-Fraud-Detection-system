@@ -1,0 +1,208 @@
+{
+  "selection_metric": "validation_average_precision",
+  "candidates": [
+    {
+      "parameters": {},
+      "validation_average_precision": 0.27076667582248043
+    },
+    {
+      "parameters": {
+        "max_depth": 3
+      },
+      "validation_average_precision": 0.2501839936858583
+    }
+  ],
+  "selected_parameters": {},
+  "selected_validation_average_precision": 0.27076667582248043,
+  "representation_comparison": {
+    "structured_only": {
+      "validation_average_precision": 0.27076667582248043
+    },
+    "structured_plus_split_graph": {
+      "validation_average_precision": 0.2545375999046526
+    }
+  },
+  "validation_review_capacity_comparison": {
+    "structured_only": {
+      "0.01": {
+        "threshold": 0.8595579862594604,
+        "objective": "review_capacity",
+        "constraints": {
+          "review_capacity": 23
+        },
+        "metrics": {
+          "accuracy": 0.9416342412451362,
+          "precision": 0.625,
+          "recall": 0.07194244604316546,
+          "f1": 0.12903225806451613,
+          "roc_auc": 0.8502710251302179,
+          "threshold": 0.8595579862594604,
+          "n_samples": 2313,
+          "n_positive": 139,
+          "average_precision": 0.27076667582248043,
+          "specificity": 0.9972401103955841,
+          "balanced_accuracy": 0.5345912782193748,
+          "review_volume": 16,
+          "review_rate": 0.006917423259835711
+        }
+      },
+      "0.05": {
+        "threshold": 0.7410568594932556,
+        "objective": "review_capacity",
+        "constraints": {
+          "review_capacity": 115
+        },
+        "metrics": {
+          "accuracy": 0.9174232598357112,
+          "precision": 0.2719298245614035,
+          "recall": 0.22302158273381295,
+          "f1": 0.2450592885375494,
+          "roc_auc": 0.8502710251302179,
+          "threshold": 0.7410568594932556,
+          "n_samples": 2313,
+          "n_positive": 139,
+          "average_precision": 0.27076667582248043,
+          "specificity": 0.9618215271389144,
+          "balanced_accuracy": 0.5924215549363637,
+          "review_volume": 114,
+          "review_rate": 0.04928664072632944
+        }
+      },
+      "0.1": {
+        "threshold": 0.6567572355270386,
+        "objective": "review_capacity",
+        "constraints": {
+          "review_capacity": 231
+        },
+        "metrics": {
+          "accuracy": 0.8906182447038478,
+          "precision": 0.24324324324324326,
+          "recall": 0.38848920863309355,
+          "f1": 0.29916897506925205,
+          "roc_auc": 0.8502710251302179,
+          "threshold": 0.6567572355270386,
+          "n_samples": 2313,
+          "n_positive": 139,
+          "average_precision": 0.27076667582248043,
+          "specificity": 0.922723091076357,
+          "balanced_accuracy": 0.6556061498547252,
+          "review_volume": 222,
+          "review_rate": 0.0959792477302205
+        }
+      },
+      "0.2": {
+        "threshold": 0.5251927971839905,
+        "objective": "review_capacity",
+        "constraints": {
+          "review_capacity": 462
+        },
+        "metrics": {
+          "accuracy": 0.8218763510592304,
+          "precision": 0.1986754966887417,
+          "recall": 0.6474820143884892,
+          "f1": 0.30405405405405406,
+          "roc_auc": 0.8502710251302179,
+          "threshold": 0.5251927971839905,
+          "n_samples": 2313,
+          "n_positive": 139,
+          "average_precision": 0.27076667582248043,
+          "specificity": 0.8330266789328427,
+          "balanced_accuracy": 0.7402543466606659,
+          "review_volume": 453,
+          "review_rate": 0.19584954604409857
+        }
+      }
+    },
+    "structured_plus_split_graph": {
+      "0.01": {
+        "threshold": 0.5033559799194336,
+        "objective": "review_capacity",
+        "constraints": {
+          "review_capacity": 23
+        },
+        "metrics": {
+          "accuracy": 0.9399048854301773,
+          "precision": 0.5,
+          "recall": 0.06474820143884892,
+          "f1": 0.11464968152866242,
+          "roc_auc": 0.8515450748876521,
+          "threshold": 0.5033559799194336,
+          "n_samples": 2313,
+          "n_positive": 139,
+          "average_precision": 0.2545375999046526,
+          "specificity": 0.9958601655933763,
+          "balanced_accuracy": 0.5303041835161126,
+          "review_volume": 18,
+          "review_rate": 0.007782101167315175
+        }
+      },
+      "0.05": {
+        "threshold": 0.3707043528556824,
+        "objective": "review_capacity",
+        "constraints": {
+          "review_capacity": 115
+        },
+        "metrics": {
+          "accuracy": 0.9234760051880675,
+          "precision": 0.32075471698113206,
+          "recall": 0.2446043165467626,
+          "f1": 0.27755102040816326,
+          "roc_auc": 0.8515450748876521,
+          "threshold": 0.3707043528556824,
+          "n_samples": 2313,
+          "n_positive": 139,
+          "average_precision": 0.2545375999046526,
+          "specificity": 0.9668813247470102,
+          "balanced_accuracy": 0.6057428206468863,
+          "review_volume": 106,
+          "review_rate": 0.04582792909641158
+        }
+      },
+      "0.1": {
+        "threshold": 0.2947065532207489,
+        "objective": "review_capacity",
+        "constraints": {
+          "review_capacity": 231
+        },
+        "metrics": {
+          "accuracy": 0.8849978383052313,
+          "precision": 0.22510822510822512,
+          "recall": 0.37410071942446044,
+          "f1": 0.2810810810810811,
+          "roc_auc": 0.8515450748876521,
+          "threshold": 0.2947065532207489,
+          "n_samples": 2313,
+          "n_positive": 139,
+          "average_precision": 0.2545375999046526,
+          "specificity": 0.9176632934682613,
+          "balanced_accuracy": 0.6458820064463608,
+          "review_volume": 231,
+          "review_rate": 0.09987029831387809
+        }
+      },
+      "0.2": {
+        "threshold": 0.20978938043117523,
+        "objective": "review_capacity",
+        "constraints": {
+          "review_capacity": 462
+        },
+        "metrics": {
+          "accuracy": 0.819282317336792,
+          "precision": 0.19739696312364424,
+          "recall": 0.6546762589928058,
+          "f1": 0.30333333333333334,
+          "roc_auc": 0.8515450748876521,
+          "threshold": 0.20978938043117523,
+          "n_samples": 2313,
+          "n_positive": 139,
+          "average_precision": 0.2545375999046526,
+          "specificity": 0.8298068077276909,
+          "balanced_accuracy": 0.7422415333602483,
+          "review_volume": 461,
+          "review_rate": 0.19930825767401644
+        }
+      }
+    }
+  },
+  "selected_representation": "structured_only"
+}
