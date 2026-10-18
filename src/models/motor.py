@@ -202,7 +202,17 @@ class MotorFraudModel:
                 f"{sorted(missing)}"
             )
 
-        # Ignore columns that were not present during model training.
+        extra = set(features.columns) - set(self._feature_columns)
+        unexpected = extra - _OPTIONAL_INFERENCE_FEATURES
+        if unexpected:
+            raise MotorModelError(
+                f"input contains unexpected feature column(s): "
+                f"{sorted(unexpected)}"
+            )
+
+        # Known optional inference features may appear when the feature
+        # pipeline is newer than a structured-only trained model. They are
+        # deliberately ignored; arbitrary columns are rejected above.
         features = features.reindex(columns=self._feature_columns).copy()
 
         features = _apply_categorical_dtypes(

@@ -469,6 +469,10 @@ def build_new_claim_features(
             "claim_type": user_vals.get("claim_type", "inpatient"),
             "num_diagnosis_codes": user_vals.get("num_diagnosis_codes", 2),
             "num_procedure_codes": user_vals.get("num_procedure_codes", 1),
+            # New claims have no historical dates to calculate duration from.
+            # Keep the engineered health feature present with a neutral value
+            # so this row matches models trained on the standard health schema.
+            "claim_duration_days": user_vals.get("claim_duration_days", 0.0),
             "is_deceased": user_vals.get("is_deceased", False),
             "chronic_condition_count": user_vals.get("chronic_condition_count", 1),
             "has_renal_disease": user_vals.get("has_renal_disease", False),
