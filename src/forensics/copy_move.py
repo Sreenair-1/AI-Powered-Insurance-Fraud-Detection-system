@@ -360,6 +360,18 @@ def compute_copy_move(
         "ratio_threshold": ratio_threshold,
         "min_distance": min_distance,
         "offset_bin_size": offset_bin_size,
+        # Pixel coordinates of each filtered match as (x1, y1, x2, y2), so a
+        # UI can draw the candidate regions. Display-only: not used by any
+        # feature or score.
+        "matched_pairs": [
+            (
+                float(keypoints[lo].pt[0]),
+                float(keypoints[lo].pt[1]),
+                float(keypoints[hi].pt[0]),
+                float(keypoints[hi].pt[1]),
+            )
+            for lo, hi, _ in matches
+        ],
     }
 
     return CopyMoveResult(
