@@ -1,0 +1,7 @@
+ring_id,synthetic_profile_id,synthetic_demographic_age,synthetic_demographic_weight,synthetic_demographic_height,synthetic_demographic_income_lpa,synthetic_demographic_smoker,synthetic_demographic_city,synthetic_demographic_occupation,synthetic_demographic_insurance_premium_category
+RING001,PROF000001,22,55,160,15.56,True,Rajkot,Marketing Manager,Low
+RING002,PROF000002,33,75,179,10.53,True,Faridabad,Plumber,Medium
+RING003,PROF000003,61,72,155,27.57,False,Varanasi,Nurse,Medium
+RING004,PROF000004,30,98,153,44.75,False,Jaipur,Real Estate Agent,High
+RING005,PROF000005,36,68,184,7.22,False,Bangalore,Data Analyst,Low
+RING006,PROF000006,45,76,194,31.59,False,Rajkot,Software Engineer,Low
