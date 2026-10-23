@@ -1,0 +1,44 @@
+@import "@fontsource-variable/inter";
+@import "./tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    @apply bg-background text-text min-h-dvh text-sm leading-normal;
+  }
+  :focus-visible {
+    outline: var(--focus-ring-width) solid rgb(var(--ring));
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: rgb(var(--primary) / 0.18);
+  }
+}
+
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
