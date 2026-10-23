@@ -145,7 +145,7 @@ export default function ClaimDetailPage() {
             </CardBody>
           </Card>
 
-          <InvestigatorNotes claimKey={key} domain={domain} />
+          <InvestigatorNotes key={`${domain}:${key}`} claimKey={key} domain={domain} />
         </div>
       </div>
 

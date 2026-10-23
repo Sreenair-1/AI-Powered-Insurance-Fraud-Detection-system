@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -201,8 +202,12 @@ async def claim_document(
     page_index: Annotated[int, Form(ge=0)] = 0,
 ) -> dict[str, Any]:
     data, filename = await _read_upload(file)
-    sample = state.sample(params)
-    return services.rescore_claim_with_document(state, sample, claim_key, data, filename, page_index)
+    # Dataset build, forensics and SHAP are CPU-bound and synchronous: run them
+    # off the event loop so other requests are not blocked meanwhile.
+    sample = await run_in_threadpool(state.sample, params)
+    return await run_in_threadpool(
+        services.rescore_claim_with_document, state, sample, claim_key, data, filename, page_index
+    )
 
 
 @app.get("/domains/{domain}/schema", response_model=schemas.ClaimSchema, tags=["assessment"])
@@ -229,7 +234,7 @@ async def assess(
         data, filename = await _read_upload(file)
         document = (data, filename, page_index)
     try:
-        return services.assess_new_claim(state, domain, parsed, document)
+        return await run_in_threadpool(services.assess_new_claim, state, domain, parsed, document)
     except ValueError as exc:
         if isinstance(exc, (services.DocumentError, ClaimViewError)):
             raise

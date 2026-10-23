@@ -321,3 +321,14 @@ def test_insights_passes_sidecars_through_unchanged(client, model_dirs):
 def test_insights_health_limitations_mention_proxy_label(client):
     body = client.get("/domains/health/insights").json()
     assert any("provider-level proxy" in text for text in body["limitations"])
+
+
+def test_document_upload_rejects_decompression_bomb(client, monkeypatch):
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1000)
+    key = _first_claim_key(client, "motor")
+    r = client.post(
+        f"/domains/motor/claims/{key}/document",
+        files={"file": ("huge.png", _png_with_duplicated_patch(), "image/png")},
+    )
+    assert r.status_code == 422
+    assert r.json()["code"] == "invalid_document"

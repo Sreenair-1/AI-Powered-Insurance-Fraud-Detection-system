@@ -461,6 +461,8 @@ def analyze_document(data: bytes, filename: str, page_index: int = 0) -> tuple[F
             preview.load()
     except PDFLoadError as exc:
         raise DocumentError(f"Could not read the PDF: {exc}") from exc
+    except Image.DecompressionBombError as exc:
+        raise DocumentError("Image has too many pixels to analyse safely.") from exc
     except OSError as exc:
         raise DocumentError(f"Could not read the image: {exc}") from exc
 
