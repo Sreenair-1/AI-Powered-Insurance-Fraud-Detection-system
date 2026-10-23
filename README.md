@@ -188,6 +188,88 @@ artifact under `models/` (for scoring) — the app shows an actionable
 `st.error` naming the missing piece and stops, rather than a raw traceback,
 if either is absent.
 
+## Running the web app (FastAPI + React)
+
+A second front end for the same pipeline: a FastAPI layer in `api/` and a
+React + Vite + TypeScript app in `web/`. The Streamlit app is unchanged and
+keeps working alongside it. Like Streamlit, the API only **loads** the
+trained artifacts from `models/` once at startup (it never trains) and
+builds the same bounded, seeded samples (500 motor; 150 inpatient + 350
+outpatient health by default, same limits as the Streamlit sliders).
+
+**One command** (API on `:8000`, web app on `:5173`):
+
+```bash
+make dev                                                     # macOS / Linux / Git Bash
+powershell -ExecutionPolicy Bypass -File scripts/dev.ps1     # Windows PowerShell
+```
+
+**Or separately:**
+
+```bash
+# 1. API (requires the trained models under models/ and data under data/raw/)
+./.venv/Scripts/python.exe -m uvicorn api.main:app --reload --port 8000
+#    interactive docs: http://localhost:8000/docs
+
+# 2. Web app (Node 20+), proxies /api -> :8000
+cd web
+npm install
+npm run dev            # http://localhost:5173
+```
+
+Production build: `cd web && npm run build && npm run preview` (serves
+`dist/` on `:4173`, still proxying `/api`). Point the dev proxy at another
+API with `INSURESIGHT_API_URL`, or a deployed build at one with
+`VITE_API_BASE`; allow extra browser origins with
+`INSURESIGHT_CORS_ORIGINS`.
+
+### API endpoints
+
+| Method | Path | Returns |
+| --- | --- | --- |
+| GET | `/health` | Model readiness per domain, feature count, risk-band cut-offs |
+| GET | `/domains/{domain}/overview` | Sample KPIs: counts per risk level, review rate, score histogram, segment breakdown, global importance, top claims |
+| GET | `/domains/{domain}/claims` | Paginated table; `search`, `risk`, `min_probability`, `segment`, `sort`, `order`, `page`, `page_size` |
+| GET | `/domains/{domain}/claims/{claim_key}` | Attributes (grouped), graph signals, probability, risk level, top-10 SHAP factors |
+| GET | `/domains/{domain}/claims/{claim_key}/graph` | Ego network (claim, entities, claims sharing them), capped at 80 nodes |
+| POST | `/domains/{domain}/claims/{claim_key}/document` | Upload image/PDF: ELA heatmap, copy-move pairs + regions, flagged metadata, tamper verdict, before/after re-score |
+| GET | `/domains/{domain}/schema` | New-claim form fields, taken from the saved model's feature list |
+| POST | `/domains/{domain}/assess` | Score a new claim from attributes (+ optional document) |
+| GET | `/domains/{domain}/insights` | Saved metrics, curves, confusion matrices, threshold and limitations from `models/<domain>/` |
+
+Every sample-dependent endpoint accepts `sample_size` (motor, 100–3000) or
+`inpatient_sample_size` (20–1200) / `outpatient_sample_size` (40–2800).
+Unknown domains and claims return `404`; invalid parameters or uploads
+return `422`; a missing model or dataset returns `503` with the fix.
+
+### What the web app shows (and what it does not)
+
+- Every number comes from the API or a saved artifact. Nothing is recomputed,
+  hard-coded or rounded beyond display formatting (full values are in tooltips).
+- Scores are labelled "risk score (model probability)", and claims are
+  "flagged for review"; each scored view carries a *decision support only –
+  requires human review* banner.
+- SHAP factors (log-odds, TreeExplainer) are shown separately from the
+  **rule-based** document-evidence adjustment that
+  `fuse_assessment_with_document_evidence` applies after an upload; the latter
+  is marked as "not SHAP".
+- Neither saved model uses graph features, so the entity network is shown as
+  investigative context. Motor garage/bank-account links are synthetic, and the
+  health label is a provider-level proxy; both are stated on Model insights.
+
+| Overview | Claim case file |
+| --- | --- |
+| ![Overview](docs/screenshots/web/01-overview-motor.png) | ![Case file](docs/screenshots/web/05-claim-detail-motor.png) |
+| **Document forensics** | **Model insights** |
+| ![Forensics](docs/screenshots/web/07-forensics-upload.png) | ![Insights](docs/screenshots/web/13-insights-health.png) |
+
+### Web checks
+
+```bash
+./.venv/Scripts/python.exe -m ruff check api tests/test_api.py
+cd web && npm run lint && npm run typecheck && npm run check:contrast && npm run build
+```
+
 ## Demo workflow
 
 1. Install dependencies and place the raw datasets (Setup, above).
