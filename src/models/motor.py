@@ -33,6 +33,20 @@ _OPTIONAL_INFERENCE_FEATURES = frozenset({
     "closeness_centrality", "eigenvector_centrality", "community_id",
     "num_entities", "max_entity_claim_degree", "mean_entity_claim_degree",
     "has_shared_entity",
+    # Forensic features can be added to the live fused row after a document
+    # upload, while older structured-only artifacts do not contain them.
+    "ela_available", "ela_high_error_pixel_ratio", "ela_max_error",
+    "ela_mean_error", "ela_median_error", "ela_p95_error", "ela_std_error",
+    "copy_move_available", "copy_move_match_ratio", "copy_move_max_cluster_size",
+    "copy_move_mean_match_distance", "copy_move_num_filtered_matches",
+    "copy_move_num_keypoints", "copy_move_num_raw_matches",
+    "copy_move_potential_duplicate_regions_found", "copy_move_std_match_distance",
+    "metadata_aspect_ratio", "metadata_available",
+    "metadata_datetime_original_modified_mismatch", "metadata_exif_field_count",
+    "metadata_exif_malformed", "metadata_file_size_bytes", "metadata_has_camera_info",
+    "metadata_has_datetime_modified", "metadata_has_datetime_original",
+    "metadata_has_exif", "metadata_has_software_tag", "metadata_height",
+    "metadata_software_editing_indicator", "metadata_width",
 })
 
 DEFAULT_XGB_PARAMS: dict = {
