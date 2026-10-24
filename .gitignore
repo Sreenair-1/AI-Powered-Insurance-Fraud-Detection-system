@@ -30,4 +30,5 @@ Thumbs.db
 .claude
 *.md
 !README.md
+!docs/*.md
 *.pdf

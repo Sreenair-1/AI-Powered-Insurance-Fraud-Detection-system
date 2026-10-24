@@ -224,6 +224,34 @@ def select_threshold(
     return ThresholdSelection(selected[0], objective, constraints, selected[1])
 
 
+def gain_curve_from_roc(roc: dict, n_samples: int, n_positive: int) -> dict:
+    """Review workload vs. positives caught, derived from a saved ROC curve.
+
+    At each ROC threshold the share of claims flagged is
+    `tpr * prevalence + fpr * (1 - prevalence)` and the share of positives
+    caught is `tpr`, so the cumulative-gain curve needs no per-claim scores.
+    """
+    if n_samples <= 0 or not 0 < n_positive < n_samples:
+        raise ValueError("need 0 < n_positive < n_samples to derive a gain curve")
+    prevalence = n_positive / n_samples
+    fpr = np.asarray(roc["fpr"], dtype=float)
+    tpr = np.asarray(roc["tpr"], dtype=float)
+    review = tpr * prevalence + fpr * (1 - prevalence)
+    thresholds = roc.get("thresholds") or [None] * len(fpr)
+    points = []
+    for rate, caught, threshold in zip(review, tpr, thresholds, strict=True):
+        precision = (caught * prevalence / rate) if rate > 0 else None
+        points.append({
+            "review_rate": float(rate),
+            "recall": float(caught),
+            "precision": precision,
+            "lift": (precision / prevalence) if precision is not None else None,
+            # sklearn's first ROC threshold is +inf (flag nothing); JSON has no inf.
+            "threshold": float(threshold) if threshold is not None and np.isfinite(threshold) else None,
+        })
+    return {"prevalence": prevalence, "n_samples": n_samples, "n_positive": n_positive, "points": points}
+
+
 def curve_data(y_true, y_proba) -> tuple[dict, dict]:
     y, p = _validate(y_true, y_proba, 0.5)
     fpr, tpr, roc_thresholds = roc_curve(y, p)

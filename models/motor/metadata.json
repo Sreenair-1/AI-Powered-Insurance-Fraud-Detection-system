@@ -90,7 +90,6 @@
     "AccidentArea": {
       "categories": [
         "Rural",
-        "Ur    ban",
         "Urban"
       ],
       "ordered": false

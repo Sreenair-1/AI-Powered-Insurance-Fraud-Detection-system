@@ -372,3 +372,20 @@ def test_assess_new_claim_document_image_stream(motor_dataset_and_model):
     assert forensic.metadata is not None
     assert isinstance(verdict, claim_view.DocumentTamperingVerdict)
     assert isinstance(assessment, ClaimRiskAssessment)
+
+
+def test_build_new_claim_features_motor_passes_through_raw_columns():
+    empty = claim_view.ForensicUploadResult(ela=None, copy_move=None, metadata=None)
+    X = claim_view.build_new_claim_features(
+        "motor", "claim:NEW-T", empty, {"Fault": "Third Party", MOTOR_TARGET: 1}
+    )
+    assert X["Fault"].iloc[0] == "Third Party"
+    assert MOTOR_TARGET not in X.columns
+
+
+def test_build_new_claim_features_health_unsupplied_amounts_are_missing():
+    empty = claim_view.ForensicUploadResult(ela=None, copy_move=None, metadata=None)
+    X = claim_view.build_new_claim_features("health", "claim:NEW-T", empty, {"DeductibleAmtPaid": 50})
+    assert X["DeductibleAmtPaid"].iloc[0] == 50
+    assert np.isnan(X["InscClaimAmtReimbursed"].iloc[0])
+    assert np.isnan(X["admission_to_claim_days"].iloc[0])

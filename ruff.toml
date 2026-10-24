@@ -1,0 +1,7 @@
+# Lint config for the API layer (api/ and its tests). The pre-existing src/
+# and app/ code is not yet ruff-clean and is not linted in CI.
+line-length = 120
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "I", "B"]

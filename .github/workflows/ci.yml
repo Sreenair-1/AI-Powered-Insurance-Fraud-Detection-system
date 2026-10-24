@@ -27,8 +27,43 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
+      - name: Lint API and benchmarks (ruff)
+        run: ruff check api tests/test_api.py src/graph/rings.py src/graph/ring_benchmark.py src/forensics/benchmark.py scripts/run_benchmarks.py tests/test_rings.py tests/test_tampering_benchmark.py
+
       - name: Setup test datasets
         run: python tests/fixtures/setup_test_data.py
 
-      - name: Run test suite
+      - name: Run test suite (includes API endpoint tests)
         run: pytest tests/ -q
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Type-check (tsc)
+        run: npm run typecheck
+
+      - name: Design-token contrast check (WCAG AA)
+        run: node scripts/check-contrast.mjs
+
+      - name: Production build
+        run: npm run build

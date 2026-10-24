@@ -166,3 +166,10 @@ def test_grayscale_ndarray_input_accepted() -> None:
     arr = rng.integers(0, 256, size=(100, 100), dtype=np.uint8)
     result = compute_copy_move(arr)
     assert isinstance(result, CopyMoveResult)
+
+
+def test_matched_pairs_metadata_matches_filtered_count() -> None:
+    result = compute_copy_move(_copy_moved_image())
+    pairs = result.metadata["matched_pairs"]
+    assert len(pairs) == result.features.num_filtered_matches
+    assert all(len(p) == 4 for p in pairs)

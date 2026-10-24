@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 from app.data_loader import HealthDataset, MotorDataset
-from src.data.schemas import MOTOR_ALL_COLUMNS
+from src.data.schemas import MOTOR_ALL_COLUMNS, MOTOR_TARGET
 from src.features.fusion import ForensicResultBundle, build_fused_features
 from src.features.structured import CLAIM_KEY_COL, build_motor_structured_features
 from src.forensics import (
@@ -458,6 +458,12 @@ def build_new_claim_features(
         raw_row["Year"] = user_vals.get("Year", 1995)
         raw_row["GarageID"] = user_vals.get("GarageID", "GRG00001")
         raw_row["BankAccountID"] = user_vals.get("BankAccountID", "BNK00001")
+        # Any other raw motor column the caller supplies (e.g. a form built
+        # from the trained feature list) passes straight through; the target
+        # is never accepted as an input.
+        for col in MOTOR_ALL_COLUMNS:
+            if col in user_vals and col != MOTOR_TARGET:
+                raw_row[col] = user_vals[col]
 
         struct_df = build_motor_structured_features(pd.DataFrame([raw_row]))
         struct_df[CLAIM_KEY_COL] = claim_key
@@ -479,6 +485,11 @@ def build_new_claim_features(
             # Keep the engineered health feature present with a neutral value
             # so this row matches models trained on the standard health schema.
             "claim_duration_days": user_vals.get("claim_duration_days", 0.0),
+            # Amounts/timings a new claim may not have yet: missing (NaN) unless
+            # supplied, which XGBoost handles natively -- never an invented value.
+            "InscClaimAmtReimbursed": user_vals.get("InscClaimAmtReimbursed", np.nan),
+            "DeductibleAmtPaid": user_vals.get("DeductibleAmtPaid", np.nan),
+            "admission_to_claim_days": user_vals.get("admission_to_claim_days", np.nan),
             "is_deceased": user_vals.get("is_deceased", False),
             "chronic_condition_count": user_vals.get("chronic_condition_count", 1),
             "has_renal_disease": user_vals.get("has_renal_disease", False),

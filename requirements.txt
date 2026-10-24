@@ -10,3 +10,6 @@ streamlit
 matplotlib
 pypdf
 pypdfium2
+fastapi
+uvicorn[standard]
+python-multipart
