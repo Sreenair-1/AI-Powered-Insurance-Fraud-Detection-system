@@ -320,6 +320,12 @@ function thin<T>(points: T[], maxPoints = 500): T[] {
   return out;
 }
 
+const CURVE_NAMES = {
+  roc: { xName: "False positive rate", yName: "True positive rate", title: "ROC" },
+  pr: { xName: "Recall", yName: "Precision", title: "Precision-recall" },
+  gain: { xName: "Share of claims reviewed", yName: "Positive-label claims caught", title: "Cumulative gain" },
+} as const;
+
 export function CurveChart({
   kind,
   x,
@@ -327,13 +333,16 @@ export function CurveChart({
   thresholds,
   baseline,
   areaLabel,
+  markerX,
 }: {
-  kind: "roc" | "pr";
+  kind: "roc" | "pr" | "gain";
   x: number[];
   y: number[];
   thresholds?: number[];
   baseline?: number;
   areaLabel: string;
+  /** Vertical marker, e.g. the review share picked on a slider. */
+  markerX?: number;
 }) {
   const c = useTokenColors();
   const reduced = usePrefersReducedMotion();
@@ -342,12 +351,12 @@ export function CurveChart({
     [x, y, thresholds],
   );
   const drawn = useMemo(() => thin(points), [points]);
-  const xName = kind === "roc" ? "False positive rate" : "Recall";
-  const yName = kind === "roc" ? "True positive rate" : "Precision";
+  const { xName, yName, title } = CURVE_NAMES[kind];
+  const diagonal = kind !== "pr";
   return (
     <ChartFrame
       height={260}
-      summary={`${kind === "roc" ? "ROC" : "Precision-recall"} curve from the saved validation artifact, ${points.length} points. ${areaLabel}.`}
+      summary={`${title} curve from the saved validation artifact, ${points.length} points. ${areaLabel}.`}
       table={{
         headers: [xName, yName, "Threshold"],
         rows: thin(points, 200).map((p) => [fmtMetric(p.x), fmtMetric(p.y), p.t == null ? "—" : fmtMetric(p.t)]),
@@ -371,7 +380,8 @@ export function CurveChart({
             {...axisProps(c)}
             label={{ value: yName, angle: -90, position: "insideLeft", offset: 18, fill: c["text-muted"], fontSize: 11 }}
           />
-          {kind === "roc" ? (
+          {markerX != null ? <ReferenceLine x={markerX} stroke={c["chart-2"]} strokeWidth={1.5} /> : null}
+          {diagonal ? (
             <ReferenceLine segment={[{ x: 0, y: 0 }, { x: 1, y: 1 }]} stroke={c["text-subtle"]} strokeDasharray="4 3" />
           ) : baseline != null ? (
             <ReferenceLine
@@ -396,7 +406,7 @@ export function CurveChart({
             }
           />
           <Line
-            type={kind === "roc" ? "linear" : "stepAfter"}
+            type={kind === "pr" ? "stepAfter" : "linear"}
             dataKey="y"
             stroke={c["chart-1"]}
             strokeWidth={2}

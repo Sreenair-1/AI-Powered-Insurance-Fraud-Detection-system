@@ -14,9 +14,10 @@ from typing import Annotated, Any, Literal, Optional
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from api import schemas, services
+from api.audit_html import render_audit_html
 from api.state import DOMAINS, AppState, DataUnavailable, ModelUnavailable, SampleParams
 from app import config
 from app.claim_view import ClaimViewError
@@ -208,6 +209,56 @@ async def claim_document(
     return await run_in_threadpool(
         services.rescore_claim_with_document, state, sample, claim_key, data, filename, page_index
     )
+
+
+@app.get("/domains/{domain}/claims/{claim_key}/review", response_model=schemas.ClaimReview, tags=["review"])
+def claim_review(state: StateDep, params: ParamsDep, claim_key: str) -> dict[str, Any]:
+    services.require_claim(state.sample(params), claim_key)
+    return services.claim_review(state, params.domain, claim_key)
+
+
+@app.post("/domains/{domain}/claims/{claim_key}/review", response_model=schemas.ClaimReview, tags=["review"])
+def record_review(state: StateDep, params: ParamsDep, claim_key: str, body: schemas.ReviewInput) -> dict[str, Any]:
+    return services.record_review(state, state.sample(params), claim_key, body.outcome, body.note, body.reviewer)
+
+
+@app.get("/domains/{domain}/reviews", response_model=schemas.ReviewSummary, tags=["review"])
+def review_summary(state: StateDep, domain: DomainDep) -> dict[str, Any]:
+    return services.review_summary(state, domain)
+
+
+def _audit_response(report: dict[str, Any], fmt: str) -> Response:
+    name = f"audit-{report['domain']}-{report['claim_key'].replace(':', '_')}"
+    if fmt == "html":
+        return HTMLResponse(render_audit_html(report))
+    return JSONResponse(report, headers={"Content-Disposition": f'attachment; filename="{name}.json"'})
+
+
+@app.get("/domains/{domain}/claims/{claim_key}/audit-report", tags=["review"])
+async def audit_report(
+    state: StateDep,
+    params: ParamsDep,
+    claim_key: str,
+    format: Annotated[Literal["json", "html"], Query(description="json download or printable html")] = "json",
+) -> Response:
+    sample = await run_in_threadpool(state.sample, params)
+    report = await run_in_threadpool(services.audit_report, state, sample, claim_key)
+    return _audit_response(report, format)
+
+
+@app.post("/domains/{domain}/claims/{claim_key}/audit-report", tags=["review"])
+async def audit_report_with_document(
+    state: StateDep,
+    params: ParamsDep,
+    claim_key: str,
+    file: Annotated[UploadFile, File(description="Document whose forensic findings go into the report")],
+    page_index: Annotated[int, Form(ge=0)] = 0,
+    format: Annotated[Literal["json", "html"], Query(description="json download or printable html")] = "json",
+) -> Response:
+    data, filename = await _read_upload(file)
+    sample = await run_in_threadpool(state.sample, params)
+    report = await run_in_threadpool(services.audit_report, state, sample, claim_key, (data, filename, page_index))
+    return _audit_response(report, format)
 
 
 @app.get("/domains/{domain}/schema", response_model=schemas.ClaimSchema, tags=["assessment"])

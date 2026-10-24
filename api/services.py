@@ -6,9 +6,13 @@ This module only selects, groups, filters, paginates and serializes.
 """
 from __future__ import annotations
 
+import functools
+import hashlib
 import io
 import json
 import math
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import networkx as nx
@@ -16,9 +20,18 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
+from api.reviews import OUTCOMES as REVIEW_OUTCOMES
 from api.serialization import image_to_data_url, to_jsonable
-from api.state import HEALTH_DOMAIN, MOTOR_DOMAIN, AppState, Model, ScoredSample
-from app import data_loader, model_loader
+from api.state import (
+    HEALTH_DOMAIN,
+    MOTOR_DOMAIN,
+    NETWORK_DETECTOR,
+    NETWORK_ENTITY_TYPES,
+    AppState,
+    Model,
+    ScoredSample,
+)
+from app import config, data_loader, model_loader
 from app.claim_view import (
     GRAPH_SIGNAL_COLUMNS,
     ClaimViewError,
@@ -49,6 +62,7 @@ from src.graph import (
     GARAGE_NODE_TYPE,
     NODE_TYPE_ATTR,
 )
+from src.models.evaluation import gain_curve_from_roc
 from src.pipeline.inference import (
     DEFAULT_RISK_THRESHOLDS,
     ClaimRiskAssessment,
@@ -279,7 +293,7 @@ def claims_page(
 # ---------------------------------------------------------------------------
 
 
-def _require_claim(sample: ScoredSample, claim_key: str) -> None:
+def require_claim(sample: ScoredSample, claim_key: str) -> None:
     if claim_key not in set(sample.dataset.X[CLAIM_KEY_COL].astype(str)):
         raise ClaimViewError(f"claim_key {claim_key!r} not found in the loaded sample")
 
@@ -291,7 +305,7 @@ def _raw_claim(sample: ScoredSample, claim_key: str) -> pd.Series:
 
 
 def claim_detail(state: AppState, sample: ScoredSample, claim_key: str) -> dict[str, Any]:
-    _require_claim(sample, claim_key)
+    require_claim(sample, claim_key)
     domain = sample.params.domain
     model = state.model(domain)
     assessment = assess_claim(domain, model, claim_row(sample.dataset, claim_key), DEFAULT_RISK_THRESHOLDS)
@@ -321,7 +335,117 @@ def claim_detail(state: AppState, sample: ScoredSample, claim_key: str) -> dict[
         "graph_signals": {c: to_jsonable(fused[c]) for c in signal_cols},
         "model_uses_graph_features": uses_graph_features(model),
         "risk_bands": risk_bands(),
+        "network_risk": network_risk(sample, claim_key),
+        "document_benchmark": document_benchmark_summary(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Network and document risk (shown beside, never inside, the model score)
+# ---------------------------------------------------------------------------
+
+MAX_RING_CLAIMS_LISTED = 25
+MAX_RING_EVIDENCE = 5
+NETWORK_METHOD = (
+    "Candidate ring: claims that share a pair of entities (e.g. a garage and a bank account) far more "
+    "often than those entities' own popularity explains (Poisson tail test, alpha {alpha:g}), joined "
+    "into groups of at least {size} claims. Rule-based; not part of the model score."
+)
+NETWORK_NOTES = {
+    MOTOR_DOMAIN: "Garage and bank-account links are synthetic (seeded augmentation with injected rings).",
+    HEALTH_DOMAIN: (
+        "Health links are physician and beneficiary: a group means the same patients and doctors recur "
+        "together more than chance, which can also be ordinary follow-up care."
+    ),
+}
+
+
+def _read_benchmark(filename: str) -> Optional[dict]:
+    return _read_sidecar(config.benchmarks_dir(), filename)
+
+
+def network_benchmark_summary() -> Optional[dict[str, Any]]:
+    """Ring benchmark results for the live detector's settings.
+
+    The live detector uses the benchmark's default alpha and ring size on
+    exact ids, so the comparable row is the noise-free one for its matching mode.
+    """
+    report = _read_benchmark("ring_benchmark.json")
+    sweep = (report or {}).get("noise_sweep") or []
+    if not sweep or sweep[0].get(NETWORK_DETECTOR.matching) is None:
+        return None
+    row = sweep[0][NETWORK_DETECTOR.matching]
+    return {
+        "noise": sweep[0].get("noise"),
+        "precision": row.get("precision"),
+        "recall": row.get("recall"),
+        "ring_recovery_rate": row.get("ring_recovery_rate"),
+        "naive_precision": sweep[0].get("naive_any_shared_entity", {}).get("precision"),
+    }
+
+
+def document_benchmark_summary() -> Optional[dict[str, Any]]:
+    """Combined-verdict detection and false-positive rates from the tampering benchmark."""
+    report = _read_benchmark("tampering_benchmark.json")
+    if not report:
+        return None
+    out = {"source": report.get("source"), "n_bills": report.get("n_bills")}
+    for condition, block in (report.get("results") or {}).items():
+        verdict = block["methods"]["combined_verdict"]
+        out[condition] = {
+            "detection_rate": verdict.get("detection_rate"),
+            "false_positive_rate": verdict.get("false_positive_rate"),
+        }
+    return out
+
+
+def _entity_label(entity: str) -> dict[str, str]:
+    kind, _, value = entity.partition(":")
+    return {"type": kind, "value": value}
+
+
+def network_risk(sample: ScoredSample, claim_key: str) -> dict[str, Any]:
+    domain = sample.params.domain
+    result = sample.rings
+    ring = result.ring_of().get(claim_key)
+    if ring is not None:
+        level = "candidate_ring"
+    elif claim_key in result.linked_claims:
+        level = "linked"
+    else:
+        level = "none"
+    payload: dict[str, Any] = {
+        "level": level,
+        "entity_types": list(NETWORK_ENTITY_TYPES[domain]),
+        "method": NETWORK_METHOD.format(alpha=NETWORK_DETECTOR.alpha, size=NETWORK_DETECTOR.min_ring_size),
+        "note": NETWORK_NOTES[domain],
+        "sample_candidate_rings": len(result.rings),
+        "sample_flagged_claims": len(result.flagged_claims()),
+        "sample_claims": result.n_claims,
+        "ring_id": None,
+        "ring_size": 0,
+        "ring_claims": [],
+        "evidence": [],
+        "benchmark": network_benchmark_summary(),
+    }
+    if ring is not None:
+        others = [c for c in ring.claims if c != claim_key]
+        payload.update({
+            "ring_id": ring.ring_id,
+            "ring_size": len(ring.claims),
+            "ring_claims": [str(c) for c in others[:MAX_RING_CLAIMS_LISTED]],
+            "evidence": [
+                {
+                    "entities": [_entity_label(e) for e in pattern.entities],
+                    "claims": len(pattern.claims),
+                    "expected": pattern.expected,
+                    "p_value": pattern.p_value,
+                    "includes_this_claim": claim_key in pattern.claims,
+                }
+                for pattern in ring.evidence[:MAX_RING_EVIDENCE]
+            ],
+        })
+    return to_jsonable(payload)
 
 
 def _node_label(node: str) -> str:
@@ -333,7 +457,7 @@ def claim_graph(sample: ScoredSample, claim_key: str) -> dict[str, Any]:
 
     Bounded to `MAX_GRAPH_NODES` the same way the Streamlit view is.
     """
-    _require_claim(sample, claim_key)
+    require_claim(sample, claim_key)
     graph: nx.Graph = sample.dataset.graph
     if claim_key not in graph:
         raise ClaimViewError(f"claim_key {claim_key!r} is not present in the relationship graph")
@@ -530,7 +654,7 @@ def analyze_document(data: bytes, filename: str, page_index: int = 0) -> tuple[F
 def rescore_claim_with_document(
     state: AppState, sample: ScoredSample, claim_key: str, data: bytes, filename: str, page_index: int
 ) -> dict[str, Any]:
-    _require_claim(sample, claim_key)
+    require_claim(sample, claim_key)
     domain = sample.params.domain
     model = state.model(domain)
     forensic, report = analyze_document(data, filename, page_index)
@@ -676,6 +800,165 @@ def assess_new_claim(
 
 
 # ---------------------------------------------------------------------------
+# Model version, investigator reviews and audit reports
+# ---------------------------------------------------------------------------
+
+MODEL_ARTIFACT_FILENAME = "model.json"
+
+
+@functools.lru_cache(maxsize=8)
+def _file_sha256(path: str, mtime_ns: int) -> str:
+    del mtime_ns  # cache key only: a retrained artifact gets a new entry
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def model_version(state: AppState, domain: str) -> dict[str, Any]:
+    """Fingerprint of the loaded artifact: SHA-256 of model.json plus its modified time."""
+    directory = state.models[domain].directory
+    artifact = directory / MODEL_ARTIFACT_FILENAME
+    sha256 = modified_at = None
+    if artifact.exists():
+        stat = artifact.stat()
+        sha256 = _file_sha256(str(artifact), stat.st_mtime_ns)
+        modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(timespec="seconds")
+    return {
+        "domain": domain,
+        "version": (sha256 or "unknown")[:12],
+        "artifact_dir": str(directory),
+        "artifact_sha256": sha256,
+        "artifact_modified_at": modified_at,
+    }
+
+
+def _review_snapshot(state: AppState, sample: ScoredSample, claim_key: str) -> dict[str, Any]:
+    """What the reviewer was looking at, stored with their decision."""
+    row = sample.table.loc[sample.table[CLAIM_KEY_COL] == claim_key].iloc[0]
+    return {
+        "fraud_probability_at_review": float(row["fraud_probability"]),
+        "risk_category_at_review": str(row["risk_category"]),
+        "network_level_at_review": network_risk(sample, claim_key)["level"],
+        "model_version": model_version(state, sample.params.domain)["version"],
+    }
+
+
+def record_review(
+    state: AppState, sample: ScoredSample, claim_key: str, outcome: str, note: str, reviewer: Optional[str]
+) -> dict[str, Any]:
+    require_claim(sample, claim_key)
+    domain = sample.params.domain
+    snapshot = _review_snapshot(state, sample, claim_key)
+    record = state.reviews.append(domain, claim_key, outcome, note, reviewer, snapshot)
+    return {"current": record, "history": state.reviews.history(domain, claim_key)}
+
+
+def claim_review(state: AppState, domain: str, claim_key: str) -> dict[str, Any]:
+    history = state.reviews.history(domain, claim_key)
+    return {"current": history[-1] if history else None, "history": history}
+
+
+def review_summary(state: AppState, domain: str) -> dict[str, Any]:
+    """Current decision per claim, counted by outcome, plus the retraining labels they imply."""
+    latest = state.reviews.latest(domain)
+    counts = {outcome: 0 for outcome in REVIEW_OUTCOMES}
+    for record in latest:
+        counts[record["outcome"]] += 1
+    labels = [
+        {"claim_key": r["claim_key"], "label": r["retraining_label"], "recorded_at": r["recorded_at"],
+         "model_version": r.get("model_version")}
+        for r in latest if r["retraining_label"] is not None
+    ]
+    return {"domain": domain, "reviewed_claims": len(latest), "counts": counts, "labels": labels, "recent": latest[:20]}
+
+
+def _graph_links(sample: ScoredSample, claim_key: str) -> list[dict[str, Any]]:
+    graph: nx.Graph = sample.dataset.graph
+    if claim_key not in graph:
+        return []
+    links = []
+    for entity in sorted(graph.neighbors(claim_key)):
+        claims = [n for n in graph.neighbors(entity) if graph.nodes[n].get(NODE_TYPE_ATTR) == CLAIM_NODE_TYPE]
+        links.append({
+            "entity_type": str(graph.nodes[entity].get(NODE_TYPE_ATTR)),
+            "entity_id": _node_label(entity),
+            "claims_in_sample": len(claims),
+            "synthetic": graph.nodes[entity].get(NODE_TYPE_ATTR) in SYNTHETIC_NODE_TYPES[sample.params.domain],
+        })
+    return links
+
+
+def _document_findings(report: dict[str, Any], data: bytes, before: dict, after: dict) -> dict[str, Any]:
+    """Forensic findings without the images (they stay in the case file, not the audit record)."""
+    return {
+        "filename": report["filename"],
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "is_pdf": report["is_pdf"],
+        "page_index": report["page_index"],
+        "verdict": report["verdict"],
+        "ela": report["ela"],
+        "copy_move": report["copy_move"],
+        "metadata_flags": report["metadata_flags"],
+        "metadata_indicators": (report["metadata"] or {}).get("indicators", []),
+        "score_before_document": before["fraud_probability"],
+        "score_after_document": after["fraud_probability"],
+        "fusion_note": FUSION_NOTE,
+    }
+
+
+AUDIT_DISCLAIMER = (
+    "Decision-support record. Scores are model probabilities used to prioritise investigation; network and "
+    "document signals are rule-based indicators with the benchmark results quoted here. None of this "
+    "establishes fraud: the reviewer's decision does."
+)
+
+
+def audit_report(
+    state: AppState,
+    sample: ScoredSample,
+    claim_key: str,
+    document: Optional[tuple[bytes, str, int]] = None,
+) -> dict[str, Any]:
+    """Everything an auditor needs to reconstruct why a claim was or was not escalated."""
+    detail = claim_detail(state, sample, claim_key)
+    domain = sample.params.domain
+    findings = None
+    if document is not None:
+        data, filename, page_index = document
+        rescored = rescore_claim_with_document(state, sample, claim_key, data, filename, page_index)
+        findings = _document_findings(rescored["forensics"], data, rescored["before"], rescored["after"])
+    report = {
+        "report_type": "claim_risk_audit",
+        "report_version": 1,
+        "report_id": str(uuid.uuid4()),
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "domain": domain,
+        "claim_key": claim_key,
+        "model": {
+            **model_version(state, domain),
+            "risk_bands": risk_bands(),
+            "operating_threshold": to_jsonable(model_loader.load_threshold_selection(state.models[domain].directory)),
+        },
+        "assessment": detail["assessment"],
+        "attributes": detail["attributes"],
+        "network": {"risk": detail["network_risk"], "graph_links": _graph_links(sample, claim_key)},
+        "document": findings,
+        "benchmarks": {"document": detail["document_benchmark"], "network": detail["network_risk"]["benchmark"]},
+        "review": claim_review(state, domain, claim_key),
+        "sample": sample.params.describe(),
+        "limitations": LIMITATIONS[domain],
+        "disclaimer": AUDIT_DISCLAIMER,
+    }
+    report = to_jsonable(report)
+    canonical = json.dumps(report, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    report["integrity"] = {"algorithm": "sha256", "digest": hashlib.sha256(canonical).hexdigest(),
+                           "scope": "every field above, as canonical JSON (sorted keys, no whitespace)"}
+    return report
+
+
+# ---------------------------------------------------------------------------
 # Model insights (saved artifacts only)
 # ---------------------------------------------------------------------------
 
@@ -687,26 +970,42 @@ def _read_sidecar(directory, filename: str) -> Optional[dict]:
     return to_jsonable(json.loads(path.read_text(encoding="utf-8")))
 
 
+def _workload_curve(roc: Optional[dict], metrics: Optional[dict]) -> Optional[dict[str, Any]]:
+    """Cumulative gain on the validation split, derived from the saved ROC curve."""
+    if not roc or not metrics or not metrics.get("n_samples") or metrics.get("n_positive") is None:
+        return None
+    try:
+        curve = gain_curve_from_roc(roc, int(metrics["n_samples"]), int(metrics["n_positive"]))
+    except (KeyError, ValueError):
+        return None
+    return {"split": "validation", **curve}
+
+
 def insights(state: AppState, domain: str) -> dict[str, Any]:
     slot = state.models[domain]
     directory = slot.directory
     model = state.model(domain)
+    eval_metrics = model_loader.load_eval_metrics(directory)
+    roc = model_loader.load_roc_curve(directory)
     return {
         "domain": domain,
         "model_dir": str(directory),
         "feature_names": model_feature_names(model),
         "uses_graph_features": uses_graph_features(model),
         "risk_bands": risk_bands(),
-        "eval_metrics": to_jsonable(model_loader.load_eval_metrics(directory)),
+        "eval_metrics": to_jsonable(eval_metrics),
         "validation_metrics": _read_sidecar(directory, "validation_metrics.json"),
         "test_metrics": to_jsonable(model_loader.load_test_metrics(directory)),
         "threshold_selection": to_jsonable(model_loader.load_threshold_selection(directory)),
         "confusion_matrix": to_jsonable(model_loader.load_confusion_matrix(directory)),
-        "roc_curve": to_jsonable(model_loader.load_roc_curve(directory)),
+        "roc_curve": to_jsonable(roc),
+        "workload_curve": to_jsonable(_workload_curve(roc, eval_metrics)),
         "pr_curve": to_jsonable(model_loader.load_pr_curve(directory)),
         "probability_diagnostics": _read_sidecar(directory, "probability_diagnostics.json"),
         "data_audit": _read_sidecar(directory, "data_audit.json"),
         "validation_experiment": _read_sidecar(directory, "validation_experiment.json"),
         "provider_grouped_test_metrics": _read_sidecar(directory, "provider_grouped_test_metrics.json"),
         "limitations": LIMITATIONS[domain],
+        "tampering_benchmark": _read_benchmark("tampering_benchmark.json"),
+        "ring_benchmark": _read_benchmark("ring_benchmark.json"),
     }

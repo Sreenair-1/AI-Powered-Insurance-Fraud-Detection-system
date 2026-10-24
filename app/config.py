@@ -29,8 +29,23 @@ MODELS_DIR = PROJECT_ROOT / "models"
 DEFAULT_HEALTH_MODEL_DIR = MODELS_DIR / "health"
 DEFAULT_MOTOR_MODEL_DIR = MODELS_DIR / "motor"
 
+DEFAULT_BENCHMARKS_DIR = MODELS_DIR / "benchmarks"
+
 HEALTH_MODEL_DIR_ENV = "FRAUD_APP_HEALTH_MODEL_DIR"
 MOTOR_MODEL_DIR_ENV = "FRAUD_APP_MOTOR_MODEL_DIR"
+BENCHMARKS_DIR_ENV = "FRAUD_APP_BENCHMARKS_DIR"
+REVIEWS_PATH_ENV = "FRAUD_APP_REVIEWS_PATH"
+DEFAULT_REVIEWS_PATH = PROJECT_ROOT / "data" / "reviews" / "reviews.jsonl"
+
+
+def reviews_path() -> Path:
+    """Append-only investigator review log (gitignored `data/`; env-overridable)."""
+    return Path(os.environ.get(REVIEWS_PATH_ENV, str(DEFAULT_REVIEWS_PATH)))
+
+
+def benchmarks_dir() -> Path:
+    """Directory holding `scripts/run_benchmarks.py` output (env-overridable)."""
+    return Path(os.environ.get(BENCHMARKS_DIR_ENV, str(DEFAULT_BENCHMARKS_DIR)))
 
 
 def health_model_dir() -> Path:

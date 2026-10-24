@@ -16,12 +16,20 @@ from typing import Optional, Union
 
 import pandas as pd
 
+from api.reviews import ReviewStore
 from app import config, data_loader
 from app.claim_view import build_investigation_table, score_loaded_sample
 from app.model_loader import (
     ModelNotAvailableError,
     load_health_model_or_raise,
     load_motor_model_or_raise,
+)
+from src.graph import BANK_ACCOUNT_NODE_TYPE, BENEFICIARY_NODE_TYPE, GARAGE_NODE_TYPE, PHYSICIAN_NODE_TYPE
+from src.graph.rings import (
+    RingDetectionResult,
+    RingDetectorConfig,
+    claim_entities_from_graph,
+    detect_candidate_rings,
 )
 from src.models.health import HealthFraudModel
 from src.models.motor import MotorFraudModel
@@ -30,6 +38,16 @@ from src.pipeline.inference import DEFAULT_RISK_THRESHOLDS
 HEALTH_DOMAIN = "health"
 MOTOR_DOMAIN = "motor"
 DOMAINS = (HEALTH_DOMAIN, MOTOR_DOMAIN)
+
+# Entity types the ring detector looks for unexpected co-sharing between.
+# Health providers are left out: every physician belongs to a provider, so
+# that pair co-occurs by structure, not by chance.
+NETWORK_ENTITY_TYPES = {
+    MOTOR_DOMAIN: (GARAGE_NODE_TYPE, BANK_ACCOUNT_NODE_TYPE),
+    HEALTH_DOMAIN: (PHYSICIAN_NODE_TYPE, BENEFICIARY_NODE_TYPE),
+}
+# Graph node ids are exact system identifiers, so no typo tolerance is needed.
+NETWORK_DETECTOR = RingDetectorConfig(matching="raw")
 
 Model = Union[HealthFraudModel, MotorFraudModel]
 Dataset = Union[data_loader.HealthDataset, data_loader.MotorDataset]
@@ -71,11 +89,13 @@ class SampleParams:
 
 @dataclass
 class ScoredSample:
-    """A sampled dataset plus its `predict_proba` scores and investigation table."""
+    """A sampled dataset plus its `predict_proba` scores, investigation table
+    and candidate rings."""
 
     params: SampleParams
     dataset: Dataset
     table: pd.DataFrame
+    rings: RingDetectionResult
 
 
 @dataclass
@@ -88,6 +108,7 @@ class ModelSlot:
 @dataclass
 class AppState:
     models: dict[str, ModelSlot] = field(default_factory=dict)
+    reviews: ReviewStore = field(default_factory=lambda: ReviewStore(config.reviews_path()))
     _samples: "OrderedDict[tuple, ScoredSample]" = field(default_factory=OrderedDict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _build_locks: dict[tuple, threading.Lock] = field(default_factory=dict)
@@ -135,7 +156,12 @@ class AppState:
             dataset = _build_dataset(params)
             scores = score_loaded_sample(model, dataset.X, DEFAULT_RISK_THRESHOLDS)
             table = build_investigation_table(params.domain, dataset, scores)
-            scored = ScoredSample(params=params, dataset=dataset, table=table)
+            rings = detect_candidate_rings(
+                claim_entities_from_graph(dataset.graph, NETWORK_ENTITY_TYPES[params.domain]),
+                NETWORK_DETECTOR,
+                n_claims=len(dataset.X),
+            )
+            scored = ScoredSample(params=params, dataset=dataset, table=table, rings=rings)
             with self._lock:
                 self._samples[key] = scored
                 while len(self._samples) > MAX_CACHED_SAMPLES:

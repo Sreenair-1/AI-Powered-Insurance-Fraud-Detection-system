@@ -77,6 +77,47 @@ export interface ClaimsPage {
   items: ClaimSummary[];
 }
 
+export interface RingEvidence {
+  entities: { type: string; value: string }[];
+  claims: number;
+  expected: number;
+  p_value: number;
+  includes_this_claim: boolean;
+}
+
+export interface NetworkRisk {
+  level: "candidate_ring" | "linked" | "none";
+  entity_types: string[];
+  method: string;
+  note: string;
+  sample_candidate_rings: number;
+  sample_flagged_claims: number;
+  sample_claims: number;
+  ring_id: string | null;
+  ring_size: number;
+  ring_claims: string[];
+  evidence: RingEvidence[];
+  benchmark: {
+    noise: number | null;
+    precision: number | null;
+    recall: number | null;
+    ring_recovery_rate: number | null;
+    naive_precision: number | null;
+  } | null;
+}
+
+export interface RateSummary {
+  detection_rate: number | null;
+  false_positive_rate: number | null;
+}
+
+export interface DocumentBenchmarkSummary {
+  source: string | null;
+  n_bills: number | null;
+  as_submitted?: RateSummary;
+  messaging_app?: RateSummary;
+}
+
 export interface ClaimDetail {
   domain: Domain;
   claim_key: string;
@@ -86,6 +127,8 @@ export interface ClaimDetail {
   graph_signals: Record<string, Scalar>;
   model_uses_graph_features: boolean;
   risk_bands: RiskBands;
+  network_risk: NetworkRisk;
+  document_benchmark: DocumentBenchmarkSummary | null;
 }
 
 export interface GraphNode {
@@ -201,5 +244,106 @@ export interface InsightsResponse {
   data_audit: Record<string, unknown> | null;
   validation_experiment: Record<string, unknown> | null;
   provider_grouped_test_metrics: { metrics?: MetricSet; n_providers?: number; aggregation?: string } | null;
+  limitations: string[];
+  tampering_benchmark: TamperingBenchmark | null;
+  ring_benchmark: RingBenchmark | null;
+  workload_curve: WorkloadCurve | null;
+}
+
+export type ReviewOutcome = "confirmed_suspicious" | "cleared" | "needs_more_info";
+
+export interface ReviewRecord {
+  domain: Domain;
+  claim_key: string;
+  outcome: ReviewOutcome;
+  retraining_label: 0 | 1 | null;
+  note: string;
+  reviewer: string | null;
+  recorded_at: string;
+  fraud_probability_at_review: number | null;
+  risk_category_at_review: string | null;
+  network_level_at_review: string | null;
+  model_version: string | null;
+}
+
+export interface ClaimReview {
+  current: ReviewRecord | null;
+  history: ReviewRecord[];
+}
+
+export interface ReviewSummary {
+  domain: Domain;
+  reviewed_claims: number;
+  counts: Record<ReviewOutcome, number>;
+  labels: { claim_key: string; label: 0 | 1; recorded_at: string; model_version: string | null }[];
+  recent: ReviewRecord[];
+}
+
+export interface WorkloadPoint {
+  review_rate: number;
+  recall: number;
+  precision: number | null;
+  lift: number | null;
+  threshold: number | null;
+}
+
+export interface WorkloadCurve {
+  split: string;
+  prevalence: number;
+  n_samples: number;
+  n_positive: number;
+  points: WorkloadPoint[];
+}
+
+// scripts/run_benchmarks.py output (models/benchmarks/*.json)
+export type ForensicMethod = "ela" | "copy_move" | "metadata" | "combined_verdict";
+
+export interface TamperingMethodResult {
+  detection_rate: number | null;
+  false_positive_rate: number | null;
+  precision: number | null;
+  roc_auc_continuous: number | null;
+  best_detection_at_fpr_10: { threshold: number | null; detection_rate: number; false_positive_rate: number };
+}
+
+export interface TamperingConditionResult {
+  n_tampered: number;
+  n_untouched: number;
+  methods: Record<ForensicMethod, TamperingMethodResult>;
+  detection_rate_by_edit: Record<string, Record<ForensicMethod, number | null>>;
+  false_positive_rate_by_variant: Record<string, Record<ForensicMethod, number | null>>;
+}
+
+export interface TamperingBenchmark {
+  source: string;
+  n_bills: number;
+  n_samples: number;
+  edit_types: string[];
+  untouched_variants: string[];
+  conditions: Record<string, string>;
+  results: Record<string, TamperingConditionResult>;
+  limitations: string[];
+}
+
+export interface RingDetectionMetrics {
+  precision: number | null;
+  recall: number | null;
+  f1: number | null;
+  ring_recovery_rate?: number | null;
+  n_candidate_rings?: number | null;
+  n_false_candidate_rings?: number | null;
+}
+
+export interface RingBenchmark {
+  seeds: number[];
+  scenario: Record<string, unknown> & { n_claims: number; n_rings: number };
+  ring_member_prevalence: number;
+  detector: { method: string; alpha: number; min_ring_size: number; matching_modes: Record<string, string> };
+  recovery_rule: string;
+  noise_sweep: ({ noise: number; naive_any_shared_entity: RingDetectionMetrics } & Record<
+    "raw" | "normalized" | "fuzzy",
+    RingDetectionMetrics
+  >)[];
+  operating_points: { noise: number; matching: string; rows: (RingDetectionMetrics & { alpha: number; min_ring_size: number })[] };
   limitations: string[];
 }

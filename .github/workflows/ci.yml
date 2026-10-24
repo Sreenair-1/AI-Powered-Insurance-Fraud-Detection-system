@@ -27,8 +27,8 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
-      - name: Lint API (ruff)
-        run: ruff check api tests/test_api.py
+      - name: Lint API and benchmarks (ruff)
+        run: ruff check api tests/test_api.py src/graph/rings.py src/graph/ring_benchmark.py src/forensics/benchmark.py scripts/run_benchmarks.py tests/test_rings.py tests/test_tampering_benchmark.py
 
       - name: Setup test datasets
         run: python tests/fixtures/setup_test_data.py

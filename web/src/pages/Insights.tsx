@@ -1,6 +1,9 @@
 import { AlertTriangle, FlaskConical, Gauge, ShieldQuestion, Target } from "lucide-react";
 import type { ReactNode } from "react";
+import { RingBenchmarkSection, TamperingBenchmarkSection } from "@/components/benchmarks";
 import { ConfusionMatrix, CurveChart } from "@/components/charts";
+import { ReviewSummaryCard } from "@/components/review";
+import { WorkloadSection } from "@/components/workload";
 import { Callout, EmptyState, ErrorState, PageHeader, SkeletonRows } from "@/components/common";
 import { useDomain } from "@/lib/domain";
 import { Badge } from "@/components/ui/badge";
@@ -185,6 +188,9 @@ function InsightsBody({ data }: { data: InsightsResponse }) {
         </Section>
       ) : null}
 
+      <WorkloadSection curve={data.workload_curve} domain={domain} />
+      <ReviewSummaryCard domain={domain} />
+
       <div className="grid gap-4 xl:grid-cols-2">
         <Section title="ROC curve" description={`Validation split · ROC-AUC ${fmtMetric(val?.roc_auc)}`}>
           {data.roc_curve ? (
@@ -283,6 +289,20 @@ function InsightsBody({ data }: { data: InsightsResponse }) {
           </p>
         </Section>
       ) : null}
+
+      <section aria-labelledby="component-eval" className="space-y-4">
+        <div>
+          <h2 id="component-eval" className="text-lg font-semibold tracking-tight text-text">
+            Component evaluation without labelled claims
+          </h2>
+          <p className="text-sm text-text-muted">
+            Document forensics and ring detection are measured on generated data with known answers
+            (models/benchmarks/). These results are the same for both domains.
+          </p>
+        </div>
+        <TamperingBenchmarkSection data={data.tampering_benchmark} />
+        <RingBenchmarkSection data={data.ring_benchmark} />
+      </section>
 
       <Section title="Model features" description="The exact columns the saved model was trained on">
         <ul className="flex flex-wrap gap-1.5">

@@ -1,18 +1,19 @@
-import { ArrowLeft, FileSearch, FolderOpen, Network, NotebookPen, Sparkles } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ArrowLeft, FileSearch, FolderOpen, Network, Sparkles } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Callout, DecisionBanner, ErrorState, ProbabilityMeter, RiskBadge, SkeletonRows } from "@/components/common";
 import { EntityGraph } from "@/components/entity-graph";
 import { DocumentRescore } from "@/components/document-rescore";
+import { AuditExport, ReviewPanel } from "@/components/review";
+import { RingEvidenceCard, RiskSignals } from "@/components/risk-signals";
 import { useDomain } from "@/lib/domain";
 import { ShapChart } from "@/components/shap-chart";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { Label, Select } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, useClaimDetail, useClaimGraph } from "@/lib/api";
 import { DOMAIN_LABEL, fmtPct, fmtValue, label, shortClaim } from "@/lib/format";
-import type { ClaimDetail, Domain } from "@/lib/types";
+import type { ClaimDetail, DocumentRescoreResponse, Domain } from "@/lib/types";
 
 export default function ClaimDetailPage() {
   const domain = useDomain();
@@ -20,6 +21,15 @@ export default function ClaimDetailPage() {
   const key = decodeURIComponent(claimKey);
   const detail = useClaimDetail(domain, key);
   const graph = useClaimGraph(domain, key);
+  const [upload, setUpload] = useState<{
+    key: string;
+    response: DocumentRescoreResponse;
+    file: File;
+    pageIndex: number;
+  } | null>(null);
+  // A result belongs to the claim it was uploaded for; navigating to another claim drops it.
+  const current = upload?.key === `${domain}:${key}` ? upload : null;
+  const documentResult = current?.response ?? null;
 
   const back = (
     <Button asChild variant="ghost" size="sm" className="-ml-2 mb-3">
@@ -49,7 +59,19 @@ export default function ClaimDetailPage() {
   return (
     <>
       {back}
-      <CaseHeader detail={d} claimKey={key} domain={domain} />
+      <CaseHeader
+        detail={d}
+        claimKey={key}
+        domain={domain}
+        actions={
+          <AuditExport
+            domain={domain}
+            claimKey={key}
+            document={current ? { file: current.file, pageIndex: current.pageIndex } : null}
+          />
+        }
+      />
+      {d ? <RiskSignals detail={d} document={documentResult} /> : <Skeleton className="mt-3 h-32" />}
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <div className="min-w-0 space-y-4">
@@ -87,6 +109,8 @@ export default function ClaimDetailPage() {
               ) : null}
             </CardBody>
           </Card>
+
+          {d ? <RingEvidenceCard risk={d.network_risk} domain={domain} /> : null}
         </div>
 
         <div className="min-w-0 space-y-4">
@@ -145,7 +169,7 @@ export default function ClaimDetailPage() {
             </CardBody>
           </Card>
 
-          <InvestigatorNotes key={`${domain}:${key}`} claimKey={key} domain={domain} />
+          <ReviewPanel key={`${domain}:${key}`} domain={domain} claimKey={key} />
         </div>
       </div>
 
@@ -165,13 +189,28 @@ export default function ClaimDetailPage() {
             </Link>
           </Button>
         </div>
-        <DocumentRescore key={key} domain={domain} claimKey={key} />
+        <DocumentRescore
+          key={key}
+          domain={domain}
+          claimKey={key}
+          onResult={(result) => setUpload(result ? { key: `${domain}:${key}`, ...result } : null)}
+        />
       </section>
     </>
   );
 }
 
-function CaseHeader({ detail, claimKey, domain }: { detail?: ClaimDetail; claimKey: string; domain: Domain }) {
+function CaseHeader({
+  detail,
+  claimKey,
+  domain,
+  actions,
+}: {
+  detail?: ClaimDetail;
+  claimKey: string;
+  domain: Domain;
+  actions?: ReactNode;
+}) {
   return (
     <Card className="overflow-hidden">
       <div className="grid gap-6 p-5 md:grid-cols-[1fr_minmax(16rem,22rem)] md:p-6">
@@ -189,6 +228,7 @@ function CaseHeader({ detail, claimKey, domain }: { detail?: ClaimDetail; claimK
             <Skeleton className="mt-3 h-7 w-64" />
           )}
           <DecisionBanner className="mt-4" />
+          {actions ? <div className="mt-3">{actions}</div> : null}
         </div>
         <div className="rounded-lg border border-border bg-surface-sunken p-4">
           <p className="text-xs font-medium text-text-muted">Risk score (model probability)</p>
@@ -204,56 +244,6 @@ function CaseHeader({ detail, claimKey, domain }: { detail?: ClaimDetail; claimK
           )}
         </div>
       </div>
-    </Card>
-  );
-}
-
-const REVIEW_STATUSES = ["Unreviewed", "Under investigation", "Referred to SIU", "Cleared after review"];
-
-function InvestigatorNotes({ claimKey, domain }: { claimKey: string; domain: Domain }) {
-  const storageKey = `insuresight.notes.${domain}.${claimKey}`;
-  const [state, setState] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem(storageKey) ?? "") as { status: string; note: string };
-    } catch {
-      return { status: REVIEW_STATUSES[0], note: "" };
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(state));
-    } catch {
-      /* storage unavailable */
-    }
-  }, [state, storageKey]);
-  return (
-    <Card>
-      <CardHeader
-        title="Investigator notes"
-        description="Saved in this browser only. Never written back to the dataset or the model."
-        icon={<NotebookPen />}
-      />
-      <CardBody className="space-y-3">
-        <div className="space-y-1.5">
-          <Label htmlFor="review-status">Review status</Label>
-          <Select id="review-status" value={state.status} onChange={(e) => setState({ ...state, status: e.target.value })}>
-            {REVIEW_STATUSES.map((s) => (
-              <option key={s}>{s}</option>
-            ))}
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="review-note">Notes</Label>
-          <textarea
-            id="review-note"
-            rows={3}
-            value={state.note}
-            onChange={(e) => setState({ ...state, note: e.target.value })}
-            placeholder="Rationale, document checks, next steps…"
-            className="w-full rounded-md border border-border-strong bg-surface px-3 py-2 text-sm text-text shadow-xs placeholder:text-text-subtle"
-          />
-        </div>
-      </CardBody>
     </Card>
   );
 }

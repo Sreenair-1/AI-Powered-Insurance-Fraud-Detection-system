@@ -1,7 +1,10 @@
-import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   AssessResponse,
   ClaimDetail,
+  ClaimReview,
+  ReviewOutcome,
+  ReviewSummary,
   ClaimSchema,
   ClaimsPage,
   DocumentRescoreResponse,
@@ -37,6 +40,12 @@ function detailMessage(detail: unknown): string {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetchOk(path, init);
+  return res.json() as Promise<T>;
+}
+
+/** fetch + the API's error contract; resolves only for 2xx responses. */
+async function fetchOk(path: string, init?: RequestInit): Promise<Response> {
   let res: Response;
   try {
     res = await fetch(`${BASE}${path}`, init);
@@ -55,7 +64,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(res.status, message, code);
   }
-  return res.json() as Promise<T>;
+  return res;
 }
 
 function qs(params: Record<string, string | number | string[] | undefined | null>): string {
@@ -167,6 +176,23 @@ export function useInsights(domain: Domain) {
   });
 }
 
+export function useClaimReview(domain: Domain, claimKey: string) {
+  const p = useSampleParams();
+  const sq = sampleQuery(domain, p);
+  return useQuery({
+    queryKey: ["review", domain, claimKey],
+    queryFn: () => request<ClaimReview>(`/domains/${domain}/claims/${enc(claimKey)}/review${qs(sq)}`),
+    retry: (count, err) => !(err instanceof ApiError && err.status === 404) && count < 2,
+  });
+}
+
+export function useReviewSummary(domain: Domain) {
+  return useQuery({
+    queryKey: ["reviews", domain],
+    queryFn: () => request<ReviewSummary>(`/domains/${domain}/reviews`),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Mutations
 // ---------------------------------------------------------------------------
@@ -184,6 +210,46 @@ export function useDocumentRescore(domain: Domain) {
       );
     },
   });
+}
+
+export function useRecordReview(domain: Domain, claimKey: string) {
+  const p = useSampleParams();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { outcome: ReviewOutcome; note: string; reviewer: string }) =>
+      request<ClaimReview>(`/domains/${domain}/claims/${enc(claimKey)}/review${qs(sampleQuery(domain, p))}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...input, reviewer: input.reviewer.trim() || null }),
+      }),
+    onSuccess: (data) => {
+      client.setQueryData(["review", domain, claimKey], data);
+      client.invalidateQueries({ queryKey: ["reviews", domain] });
+    },
+  });
+}
+
+/**
+ * Fetch the audit report for a claim. With a document, the server re-runs
+ * forensics on it so the findings in the record are its own, not the browser's.
+ */
+export async function fetchAuditReport(
+  domain: Domain,
+  claimKey: string,
+  sample: SampleParams,
+  format: "json" | "html",
+  document?: { file: File; pageIndex: number } | null,
+): Promise<Blob> {
+  const path = `/domains/${domain}/claims/${enc(claimKey)}/audit-report${qs({ ...sampleQuery(domain, sample), format })}`;
+  let init: RequestInit | undefined;
+  if (document) {
+    const body = new FormData();
+    body.append("file", document.file);
+    body.append("page_index", String(document.pageIndex));
+    init = { method: "POST", body };
+  }
+  const res = await fetchOk(path, init);
+  return res.blob();
 }
 
 export function useAssess(domain: Domain) {

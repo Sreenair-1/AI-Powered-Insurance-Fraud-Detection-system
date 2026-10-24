@@ -1,0 +1,244 @@
+{
+  "benchmark": "document_tampering",
+  "version": 1,
+  "seed": 42,
+  "source": "synthetic_rendered_bills",
+  "n_bills": 40,
+  "n_samples": 640,
+  "edit_types": [
+    "copy_move",
+    "splice",
+    "amount_edit",
+    "amount_edit_in_editor"
+  ],
+  "untouched_variants": [
+    "original",
+    "recompressed",
+    "downscaled",
+    "screenshot_png"
+  ],
+  "conditions": {
+    "as_submitted": "File exactly as produced by the capture or the edit",
+    "messaging_app": "Re-shared like a chat app: downscaled to 75%, JPEG quality 70, metadata stripped"
+  },
+  "results": {
+    "as_submitted": {
+      "n_tampered": 160,
+      "n_untouched": 160,
+      "methods": {
+        "ela": {
+          "detection_rate": 0.0,
+          "false_positive_rate": 0.0,
+          "precision": null,
+          "roc_auc_continuous": null,
+          "best_detection_at_fpr_10": {
+            "threshold": null,
+            "detection_rate": 0.0,
+            "false_positive_rate": 0.0
+          }
+        },
+        "copy_move": {
+          "detection_rate": 1.0,
+          "false_positive_rate": 1.0,
+          "precision": 0.5,
+          "roc_auc_continuous": 0.55154296875,
+          "best_detection_at_fpr_10": {
+            "threshold": 6.0,
+            "detection_rate": 0.15625,
+            "false_positive_rate": 0.0875
+          }
+        },
+        "metadata": {
+          "detection_rate": 0.25,
+          "false_positive_rate": 0.0,
+          "precision": 1.0,
+          "roc_auc_continuous": 0.625,
+          "best_detection_at_fpr_10": {
+            "threshold": 2.0,
+            "detection_rate": 0.25,
+            "false_positive_rate": 0.0
+          }
+        },
+        "combined_verdict": {
+          "detection_rate": 1.0,
+          "false_positive_rate": 1.0,
+          "precision": 0.5,
+          "roc_auc_continuous": 0.63515625,
+          "best_detection_at_fpr_10": {
+            "threshold": 0.8500000000000001,
+            "detection_rate": 0.25,
+            "false_positive_rate": 0.0
+          }
+        }
+      },
+      "detection_rate_by_edit": {
+        "copy_move": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        },
+        "splice": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        },
+        "amount_edit": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        },
+        "amount_edit_in_editor": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 1.0,
+          "combined_verdict": 1.0
+        }
+      },
+      "false_positive_rate_by_variant": {
+        "original": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        },
+        "recompressed": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        },
+        "downscaled": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        },
+        "screenshot_png": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        }
+      },
+      "mean_tampering_score": {
+        "tampered": 0.520625,
+        "untouched": 0.38312499999999994
+      }
+    },
+    "messaging_app": {
+      "n_tampered": 160,
+      "n_untouched": 160,
+      "methods": {
+        "ela": {
+          "detection_rate": 0.0,
+          "false_positive_rate": 0.0,
+          "precision": null,
+          "roc_auc_continuous": null,
+          "best_detection_at_fpr_10": {
+            "threshold": null,
+            "detection_rate": 0.0,
+            "false_positive_rate": 0.0
+          }
+        },
+        "copy_move": {
+          "detection_rate": 1.0,
+          "false_positive_rate": 1.0,
+          "precision": 0.5,
+          "roc_auc_continuous": 0.49664062499999995,
+          "best_detection_at_fpr_10": {
+            "threshold": 6.0,
+            "detection_rate": 0.05625,
+            "false_positive_rate": 0.05
+          }
+        },
+        "metadata": {
+          "detection_rate": 0.0,
+          "false_positive_rate": 0.0,
+          "precision": null,
+          "roc_auc_continuous": null,
+          "best_detection_at_fpr_10": {
+            "threshold": null,
+            "detection_rate": 0.0,
+            "false_positive_rate": 0.0
+          }
+        },
+        "combined_verdict": {
+          "detection_rate": 1.0,
+          "false_positive_rate": 1.0,
+          "precision": 0.5,
+          "roc_auc_continuous": 0.490625,
+          "best_detection_at_fpr_10": {
+            "threshold": null,
+            "detection_rate": 0.0,
+            "false_positive_rate": 0.0
+          }
+        }
+      },
+      "detection_rate_by_edit": {
+        "copy_move": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        },
+        "splice": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        },
+        "amount_edit": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        },
+        "amount_edit_in_editor": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        }
+      },
+      "false_positive_rate_by_variant": {
+        "original": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        },
+        "recompressed": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        },
+        "downscaled": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        },
+        "screenshot_png": {
+          "ela": 0.0,
+          "copy_move": 1.0,
+          "metadata": 0.0,
+          "combined_verdict": 1.0
+        }
+      },
+      "mean_tampering_score": {
+        "tampered": 0.36624999999999996,
+        "untouched": 0.3681249999999999
+      }
+    }
+  },
+  "limitations": [
+    "Bills are rendered by the benchmark, not photographed claim documents",
+    "Edits are generated by this module; real forgeries (re-typed bills, reprinted documents) can look different",
+    "Untouched and edited copies are 50/50 here, so precision is far higher than it would be at real tampering rates"
+  ],
+  "runtime_seconds": 88.3
+}

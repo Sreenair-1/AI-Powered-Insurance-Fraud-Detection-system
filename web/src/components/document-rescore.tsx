@@ -3,7 +3,7 @@ import { useId, useState } from "react";
 import { toast } from "sonner";
 import { useDocumentRescore } from "@/lib/api";
 import { fmtPct } from "@/lib/format";
-import type { Domain } from "@/lib/types";
+import type { DocumentRescoreResponse, Domain } from "@/lib/types";
 import { ErrorState } from "./common";
 import { BeforeAfter, Dropzone, ForensicReportView } from "./forensics";
 import { ShapChart } from "./shap-chart";
@@ -14,9 +14,19 @@ import { Skeleton } from "./ui/skeleton";
 
 /**
  * Upload a document for a loaded claim, run forensics and show the
- * before/after re-score. Parents pass `key={claimKey}` to reset on claim change.
+ * before/after re-score. Parents pass `key={claimKey}` to reset on claim change;
+ * `onResult` receives each analysis with the file it came from (or null when
+ * the file is cleared).
  */
-export function DocumentRescore({ domain, claimKey }: { domain: Domain; claimKey: string }) {
+export function DocumentRescore({
+  domain,
+  claimKey,
+  onResult,
+}: {
+  domain: Domain;
+  claimKey: string;
+  onResult?: (result: { response: DocumentRescoreResponse; file: File; pageIndex: number } | null) => void;
+}) {
   const pageId = useId();
   const [file, setFile] = useState<File | null>(null);
   const [page, setPage] = useState(1);
@@ -25,13 +35,16 @@ export function DocumentRescore({ domain, claimKey }: { domain: Domain; claimKey
 
   const run = () => {
     if (!file) return;
+    const pageIndex = isPdf ? page - 1 : 0;
     rescore.mutate(
-      { claimKey, file, pageIndex: isPdf ? page - 1 : 0 },
+      { claimKey, file, pageIndex },
       {
-        onSuccess: (r) =>
+        onSuccess: (r) => {
+          onResult?.({ response: r, file, pageIndex });
           toast.success("Document analysed", {
             description: `Risk score ${fmtPct(r.before.fraud_probability)} → ${fmtPct(r.after.fraud_probability)}`,
-          }),
+          });
+        },
         onError: (e) => toast.error("Analysis failed", { description: e.message }),
       },
     );
@@ -47,6 +60,7 @@ export function DocumentRescore({ domain, claimKey }: { domain: Domain; claimKey
               setFile(f);
               setPage(1);
               rescore.reset();
+              onResult?.(null);
             }}
             disabled={rescore.isPending}
             compact

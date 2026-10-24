@@ -115,6 +115,44 @@ class AttributeGroup(BaseModel):
     fields: list[str]
 
 
+class RingEntity(BaseModel):
+    type: str
+    value: str
+
+
+class RingEvidence(BaseModel):
+    entities: list[RingEntity]
+    claims: int = Field(description="Claims in the sample using both entities")
+    expected: float = Field(description="Claims expected to share this pair by chance")
+    p_value: float
+    includes_this_claim: bool
+
+
+class NetworkBenchmark(BaseModel):
+    noise: Optional[float] = None
+    precision: Optional[float] = None
+    recall: Optional[float] = None
+    ring_recovery_rate: Optional[float] = None
+    naive_precision: Optional[float] = None
+
+
+class NetworkRisk(BaseModel):
+    level: Literal["candidate_ring", "linked", "none"]
+    entity_types: list[str]
+    method: str
+    note: str
+    sample_candidate_rings: int
+    sample_flagged_claims: int
+    sample_claims: int
+    ring_id: Optional[str] = None
+    ring_size: int = 0
+    ring_claims: list[str] = Field(description="Other claims in the candidate ring (capped)")
+    evidence: list[RingEvidence]
+    benchmark: Optional[NetworkBenchmark] = Field(
+        default=None, description="Ring benchmark results for the same detector settings, if generated"
+    )
+
+
 class ClaimDetail(BaseModel):
     domain: Domain
     claim_key: str
@@ -124,6 +162,53 @@ class ClaimDetail(BaseModel):
     graph_signals: dict[str, Any]
     model_uses_graph_features: bool
     risk_bands: RiskBands
+    network_risk: NetworkRisk
+    document_benchmark: Optional[dict[str, Any]] = Field(
+        default=None, description="Tampering benchmark verdict detection/false-positive rates, if generated"
+    )
+
+
+ReviewOutcome = Literal["confirmed_suspicious", "cleared", "needs_more_info"]
+
+
+class ReviewInput(BaseModel):
+    outcome: ReviewOutcome
+    note: str = Field(default="", max_length=4000)
+    reviewer: Optional[str] = Field(default=None, max_length=120)
+
+
+class ReviewRecord(BaseModel):
+    domain: Domain
+    claim_key: str
+    outcome: ReviewOutcome
+    retraining_label: Optional[int] = Field(description="1 confirmed, 0 cleared, null while more info is needed")
+    note: str
+    reviewer: Optional[str]
+    recorded_at: str
+    fraud_probability_at_review: Optional[float] = None
+    risk_category_at_review: Optional[str] = None
+    network_level_at_review: Optional[str] = None
+    model_version: Optional[str] = None
+
+
+class ClaimReview(BaseModel):
+    current: Optional[ReviewRecord]
+    history: list[ReviewRecord] = Field(description="Every decision for this claim, oldest first")
+
+
+class RetrainingLabel(BaseModel):
+    claim_key: str
+    label: int
+    recorded_at: str
+    model_version: Optional[str] = None
+
+
+class ReviewSummary(BaseModel):
+    domain: Domain
+    reviewed_claims: int
+    counts: dict[str, int]
+    labels: list[RetrainingLabel]
+    recent: list[ReviewRecord]
 
 
 class GraphNode(BaseModel):
@@ -245,3 +330,8 @@ class InsightsResponse(BaseModel):
     validation_experiment: Optional[dict[str, Any]]
     provider_grouped_test_metrics: Optional[dict[str, Any]]
     limitations: list[str]
+    tampering_benchmark: Optional[dict[str, Any]] = None
+    ring_benchmark: Optional[dict[str, Any]] = None
+    workload_curve: Optional[dict[str, Any]] = Field(
+        default=None, description="Validation cumulative gain (share reviewed vs. positives caught) from the ROC curve"
+    )

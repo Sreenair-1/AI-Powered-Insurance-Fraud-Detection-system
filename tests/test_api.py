@@ -18,7 +18,7 @@ from PIL import Image
 from api.main import app
 from api.state import AppState
 from app import data_loader
-from app.config import HEALTH_MODEL_DIR_ENV, MOTOR_MODEL_DIR_ENV
+from app.config import BENCHMARKS_DIR_ENV, HEALTH_MODEL_DIR_ENV, MOTOR_MODEL_DIR_ENV, REVIEWS_PATH_ENV
 from src.models.health import HealthFraudModel
 from src.models.motor import MotorFraudModel
 from src.models.persistence import save_health_model, save_motor_model
@@ -39,6 +39,9 @@ def model_dirs(tmp_path, monkeypatch):
 
     monkeypatch.setenv(MOTOR_MODEL_DIR_ENV, str(motor_dir))
     monkeypatch.setenv(HEALTH_MODEL_DIR_ENV, str(health_dir))
+    # Never read the real models/benchmarks/ or write the real review log from tests.
+    monkeypatch.setenv(BENCHMARKS_DIR_ENV, str(tmp_path / "benchmarks"))
+    monkeypatch.setenv(REVIEWS_PATH_ENV, str(tmp_path / "reviews" / "reviews.jsonl"))
     return motor_dir, health_dir
 
 
@@ -178,6 +181,26 @@ def test_claim_detail(client, domain):
     # Labels never leak into the investigator view.
     assert "FraudFound_P" not in body["attributes"]
     assert "PotentialFraud" not in body["attributes"]
+    network = body["network_risk"]
+    assert network["level"] in {"candidate_ring", "linked", "none"}
+    assert network["benchmark"] is None  # no benchmark files in the test benchmarks dir
+    assert body["document_benchmark"] is None
+
+
+def test_claim_detail_network_risk_reports_injected_ring(client):
+    """The motor fixture's seeded augmentation injects rings; a flagged claim's
+    detail lists its ring, the other members and the shared-pair evidence."""
+    claims = client.get("/domains/motor/claims", params={"page_size": 100}).json()["items"]
+    details = [client.get(f"/domains/motor/claims/{c['claim_key']}").json() for c in claims]
+    flagged = [d for d in details if d["network_risk"]["level"] == "candidate_ring"]
+    assert flagged, "expected at least one injected ring to be detected in the motor sample"
+    risk = flagged[0]["network_risk"]
+    assert risk["ring_size"] == len(risk["ring_claims"]) + 1
+    assert flagged[0]["claim_key"] not in risk["ring_claims"]
+    evidence = risk["evidence"][0]
+    assert {e["type"] for e in evidence["entities"]} == {"garage", "bank_account"}
+    assert evidence["claims"] >= 2 and evidence["p_value"] <= 1e-3
+    assert evidence["expected"] < evidence["claims"]
 
 
 def test_claim_detail_unknown_claim_is_404(client):
@@ -323,6 +346,30 @@ def test_insights_health_limitations_mention_proxy_label(client):
     assert any("provider-level proxy" in text for text in body["limitations"])
 
 
+def test_benchmarks_are_passed_through_and_summarised(client, tmp_path):
+    body = client.get("/domains/motor/insights").json()
+    assert body["tampering_benchmark"] is None and body["ring_benchmark"] is None
+
+    bench_dir = tmp_path / "benchmarks"
+    bench_dir.mkdir()
+    verdict = {"detection_rate": 1.0, "false_positive_rate": 0.9}
+    tampering = {"source": "synthetic_rendered_bills", "n_bills": 2,
+                 "results": {"as_submitted": {"methods": {"combined_verdict": verdict}}}}
+    fuzzy = {"precision": 0.2, "recall": 0.77, "ring_recovery_rate": 0.875}
+    rings = {"noise_sweep": [{"noise": 0.0, "naive_any_shared_entity": {"precision": 0.02},
+                              "raw": fuzzy, "normalized": fuzzy, "fuzzy": fuzzy}]}
+    (bench_dir / "tampering_benchmark.json").write_text(json.dumps(tampering), encoding="utf-8")
+    (bench_dir / "ring_benchmark.json").write_text(json.dumps(rings), encoding="utf-8")
+
+    body = client.get("/domains/health/insights").json()
+    assert body["tampering_benchmark"] == tampering
+    assert body["ring_benchmark"] == rings
+
+    detail = client.get(f"/domains/motor/claims/{_first_claim_key(client, 'motor')}").json()
+    assert detail["document_benchmark"]["as_submitted"] == verdict
+    assert detail["network_risk"]["benchmark"] == {"noise": 0.0, **fuzzy, "naive_precision": 0.02}
+
+
 def test_document_upload_rejects_decompression_bomb(client, monkeypatch):
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1000)
     key = _first_claim_key(client, "motor")
@@ -332,3 +379,108 @@ def test_document_upload_rejects_decompression_bomb(client, monkeypatch):
     )
     assert r.status_code == 422
     assert r.json()["code"] == "invalid_document"
+
+
+# ---------------------------------------------------------------------------
+# Workload curve, investigator reviews and audit reports
+# ---------------------------------------------------------------------------
+
+
+def test_insights_workload_curve_is_derived_from_saved_roc(client, model_dirs):
+    motor_dir, _ = model_dirs
+    (motor_dir / "eval_metrics.json").write_text(json.dumps({"n_samples": 100, "n_positive": 10}), encoding="utf-8")
+    roc = {"fpr": [0.0, 0.0, 0.1, 1.0], "tpr": [0.0, 0.5, 0.9, 1.0], "thresholds": [float("inf"), 0.8, 0.4, 0.0]}
+    (motor_dir / "roc_curve.json").write_text(json.dumps(roc), encoding="utf-8")
+
+    curve = client.get("/domains/motor/insights").json()["workload_curve"]
+    assert curve["split"] == "validation" and curve["prevalence"] == pytest.approx(0.1)
+    second = curve["points"][1]  # flag 5 of 10 positives, no negatives: 5% of claims reviewed
+    assert second["review_rate"] == pytest.approx(0.05)
+    assert second["recall"] == pytest.approx(0.5)
+    assert second["precision"] == pytest.approx(1.0) and second["lift"] == pytest.approx(10.0)
+    assert curve["points"][0]["threshold"] is None  # +inf is not valid JSON
+    assert curve["points"][-1]["review_rate"] == pytest.approx(1.0)
+
+
+def test_review_is_recorded_with_score_snapshot_and_history(client, model_dirs, tmp_path):
+    key = _first_claim_key(client, "motor")
+    assert client.get(f"/domains/motor/claims/{key}/review").json() == {"current": None, "history": []}
+
+    first = client.post(f"/domains/motor/claims/{key}/review",
+                        json={"outcome": "needs_more_info", "note": "Ask for the repair invoice", "reviewer": " Asha "})
+    assert first.status_code == 200
+    record = first.json()["current"]
+    assert record["retraining_label"] is None and record["reviewer"] == "Asha"
+    assert 0.0 <= record["fraud_probability_at_review"] <= 1.0
+    assert record["risk_category_at_review"] in {"low", "medium", "high"}
+    assert len(record["model_version"]) == 12
+
+    confirm = {"outcome": "confirmed_suspicious", "note": "Invoice altered"}
+    client.post(f"/domains/motor/claims/{key}/review", json=confirm)
+    body = client.get(f"/domains/motor/claims/{key}/review").json()
+    assert [r["outcome"] for r in body["history"]] == ["needs_more_info", "confirmed_suspicious"]
+    assert body["current"]["retraining_label"] == 1
+
+    log = (tmp_path / "reviews" / "reviews.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(log) == 2  # append-only: the first decision is kept
+
+    summary = client.get("/domains/motor/reviews").json()
+    assert summary["reviewed_claims"] == 1
+    assert summary["counts"] == {"confirmed_suspicious": 1, "cleared": 0, "needs_more_info": 0}
+    assert summary["labels"] == [
+        {"claim_key": key, "label": 1, "recorded_at": body["current"]["recorded_at"],
+         "model_version": body["current"]["model_version"]}
+    ]
+    assert client.get("/domains/health/reviews").json()["reviewed_claims"] == 0
+
+
+def test_review_validation(client):
+    url = f"/domains/motor/claims/{_first_claim_key(client, 'motor')}/review"
+    assert client.post(url, json={"outcome": "fraud"}).status_code == 422
+    assert client.post(url, json={"outcome": "cleared", "note": "x" * 4001}).status_code == 422
+    assert client.post("/domains/motor/claims/claim:nope/review", json={"outcome": "cleared"}).status_code == 404
+    assert client.get("/domains/motor/claims/claim:nope/review").status_code == 404
+
+
+def test_audit_report_json_is_complete_and_verifiable(client):
+    import hashlib
+
+    key = _first_claim_key(client, "motor")
+    client.post(f"/domains/motor/claims/{key}/review", json={"outcome": "cleared", "note": "Matches police report"})
+    r = client.get(f"/domains/motor/claims/{key}/audit-report")
+    assert r.status_code == 200
+    assert "attachment" in r.headers["content-disposition"]
+    report = r.json()
+    assert report["claim_key"] == key and report["report_type"] == "claim_risk_audit"
+    assert report["assessment"]["top_factors"]
+    assert len(report["model"]["version"]) == 12 and report["model"]["risk_bands"] == {"medium": 0.3, "high": 0.7}
+    assert report["network"]["graph_links"] and {"garage", "bank_account"} <= {
+        link["entity_type"] for link in report["network"]["graph_links"]}
+    assert all(link["synthetic"] for link in report["network"]["graph_links"])
+    assert report["document"] is None
+    assert report["review"]["current"]["outcome"] == "cleared"
+    assert "FraudFound_P" not in report["attributes"]
+
+    integrity = report.pop("integrity")
+    canonical = json.dumps(report, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    assert integrity["digest"] == hashlib.sha256(canonical).hexdigest()
+
+
+def test_audit_report_with_document_and_printable_html(client):
+    key = _first_claim_key(client, "motor")
+    png = _png_with_duplicated_patch()
+    r = client.post(f"/domains/motor/claims/{key}/audit-report",
+                    files={"file": ("bill<1>.png", png, "image/png")})
+    assert r.status_code == 200
+    document = r.json()["document"]
+    assert document["filename"] == "bill<1>.png"
+    assert len(document["sha256"]) == 64
+    assert document["verdict"]["status"] in {"authentic", "suspicious", "tampered"}
+    assert "ela_image" not in document and "original_image" not in document
+
+    page = client.post(f"/domains/motor/claims/{key}/audit-report", params={"format": "html"},
+                       files={"file": ("bill<1>.png", png, "image/png")})
+    assert page.status_code == 200 and page.headers["content-type"].startswith("text/html")
+    assert "Claim risk audit report" in page.text
+    assert "bill&lt;1&gt;.png" in page.text and "bill<1>.png" not in page.text  # escaped
+    assert client.get("/domains/motor/claims/claim:nope/audit-report").status_code == 404
