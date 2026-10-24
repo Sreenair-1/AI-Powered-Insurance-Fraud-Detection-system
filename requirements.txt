@@ -4,7 +4,7 @@ scikit-learn
 xgboost
 shap
 networkx
-opencv-python
+opencv-python-headless
 Pillow
 streamlit
 matplotlib

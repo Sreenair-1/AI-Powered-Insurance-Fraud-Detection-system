@@ -475,6 +475,12 @@ def build_new_claim_features(
             "claim_type": user_vals.get("claim_type", "inpatient"),
             "num_diagnosis_codes": user_vals.get("num_diagnosis_codes", 2),
             "num_procedure_codes": user_vals.get("num_procedure_codes", 1),
+            # Amounts and dates are not available from a document alone.
+            # Keep the standard fused health schema complete with neutral
+            # defaults; the standalone form can override these values.
+            "InscClaimAmtReimbursed": user_vals.get("InscClaimAmtReimbursed", 0.0),
+            "DeductibleAmtPaid": user_vals.get("DeductibleAmtPaid", 0.0),
+            "admission_to_claim_days": user_vals.get("admission_to_claim_days", 0.0),
             # New claims have no historical dates to calculate duration from.
             # Keep the engineered health feature present with a neutral value
             # so this row matches models trained on the standard health schema.

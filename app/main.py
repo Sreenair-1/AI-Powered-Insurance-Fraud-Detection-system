@@ -8,6 +8,7 @@ See `docs/app_ui.md`.
 from __future__ import annotations
 
 import sys
+import html
 from pathlib import Path
 from typing import Any, Optional
 import html
@@ -609,6 +610,16 @@ def _new_claim_overrides(domain: str) -> dict[str, Any]:
         values["claim_type"] = c1.selectbox("Claim Type", ["inpatient", "outpatient"])
         values["num_diagnosis_codes"] = c2.number_input("Diagnosis Codes", min_value=0, value=2)
         values["num_procedure_codes"] = c3.number_input("Procedure Codes", min_value=0, value=1)
+        c1, c2, c3 = st.columns(3)
+        values["InscClaimAmtReimbursed"] = c1.number_input(
+            "Reimbursed Amount (INR)", min_value=0.0, value=0.0, step=500.0
+        )
+        values["DeductibleAmtPaid"] = c2.number_input(
+            "Deductible Paid (INR)", min_value=0.0, value=0.0, step=100.0
+        )
+        values["admission_to_claim_days"] = c3.number_input(
+            "Admission-to-Claim Days", min_value=0.0, value=0.0, step=1.0
+        )
         c1, c2 = st.columns(2)
         values["chronic_condition_count"] = c1.number_input("Chronic Condition Count", min_value=0, value=1)
         values["has_renal_disease"] = c2.checkbox("Renal Disease Indicator")
